@@ -1,32 +1,29 @@
 package main
 
 import (
-	//"fmt"
 	"net/http"
-
-	"github.com/urfave/negroni"
-	"github.com/goincremental/negroni-sessions"
-	"github.com/goincremental/negroni-sessions/cookiestore"
-	"github.com/gorilla/mux"
-	//"github.com/gorilla/sessions"
-	"github.com/satori/go.uuid"
-	_ "github.com/go-sql-driver/mysql"
-
-	"golang.org/x/crypto/bcrypt"
-
-	//"github.com/bhperry/testfulapi/handlers"
 	"fmt"
-	"encoding/base64"
-	"crypto/rand"
 	"database/sql"
 	"flag"
 	"time"
 	"log"
 	"encoding/json"
 	"strings"
+
+	"github.com/urfave/negroni"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
+	"github.com/satori/go.uuid"
+	_ "github.com/go-sql-driver/mysql"
+
+	"golang.org/x/crypto/bcrypt"
+
+	//"github.com/bhperry/testfulapi/handlers"
 )
 
 var db, err = sql.Open("mysql", "root:password1234@/userdb?charset=utf8")
+
+var store = sessions.NewCookieStore([]byte("super-duper-ultra-mega-secret-key"))
 
 
 type User struct {
@@ -46,12 +43,12 @@ func main() {
 	flag.StringVar(&dir, "dir", ".", "the directory to serve files from. Defaults to the current dir")
 	flag.Parse()
 
+	//Set max age for session cookies to one day
+	//store.Options = &sessions.Options{
+	//	MaxAge: 86400,
+	//}
 
-	store := cookiestore.New([]byte("super-duper-ultra-secret-key"))
-	store.Options(sessions.Options{
-		MaxAge: 86400,
-	})
-
+	//Setup endpoints with their handlers
 	router := mux.NewRouter()
 	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir(dir))))
 	router.HandleFunc("/", IndexHandler).Methods("GET")
@@ -61,7 +58,7 @@ func main() {
 	router.HandleFunc("/utility/", RequestUtilityHandler).Methods("GET")
 
 	n := negroni.New()
-	n.Use(sessions.Sessions("global_session_store", store))
+	//n.Use(sessions.Sessions("global_session_store", store))
 	n.UseHandler(router)
 
 	srv := &http.Server{
@@ -75,11 +72,25 @@ func main() {
 }
 
 func IndexHandler(w http.ResponseWriter, r *http.Request) {
-	session := sessions.GetSession(r)
-	authenticated := session.Get("authenticated")
+	session, err := store.Get(r, "session")
+	if err != nil {
+		HttpResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
+	authenticated := session.Values["authenticated"]
 	if authenticated != nil {
-		fmt.Fprint(w, "User authenticated")
+		var userUuid, email, address, phone string
+		username := fmt.Sprintf("%s", session.Values["username"])
+		queryUser := "SELECT uuid, email, address, phone FROM users WHERE username = ?"
+		err := db.QueryRow(queryUser, username).Scan(&userUuid, &email, &address, &phone)
+		if err == sql.ErrNoRows || err != nil {
+			HttpResponse(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		//rows, err := db.Query("SELECT key, val FROM user_details WHERE uuid = ?")
+		fmt.Fprintf(w, "User %s authenticated", session.Values["username"])
 	} else {
 		json.NewEncoder(w).Encode("Hello, world!")
 	}
@@ -113,13 +124,15 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func UserHandler(w http.ResponseWriter, r *http.Request) {
-	session := sessions.GetSession(r)
-	authenticated := session.Get("authenticated")
+	//session := sessions.GetSession(r)
+	//authenticated := session.Get("authenticated")
+
+	session,_ := store.Get(r, "session")
+	authenticated := session.Values["authenticated"]
 	vars := mux.Vars(r)
 
 	switch r.Method {
 	case "GET": {
-		println(authenticated)
 		if authenticated != nil {
 			fmt.Fprintf(w, "THIS IS USER: %q\n", vars["username"])
 		} else {
@@ -139,7 +152,8 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func AuthHandler(w http.ResponseWriter, r *http.Request) {
-	session := sessions.GetSession(r)
+	//session := sessions.GetSession(r)
+	session,_ := store.Get(r, "session")
 
 	switch r.Method {
 	case "POST": {
@@ -161,14 +175,18 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		session.Set("authenticated", true)
+		//session.Set("authenticated", true)
+		session.Values["username"] = user.Username
+		session.Values["authenticated"] = true
+		session.Save(r, w)
 		HttpResponse(w, http.StatusOK, "Authenticated")
 		break
 	}
 	case "DELETE": {
-		//Clear the current user's session
-		session.Delete("authenticated")
-		session.Clear()
+		//Clear the current user's session by expiring the cookie
+		session.Options.MaxAge = -1
+		session.Save(r, w)
+		HttpResponse(w, http.StatusOK, "Unauthenticated")
 		break
 	}
 	}
@@ -184,17 +202,6 @@ func CheckErr(err error) bool {
 		return true
 	}
 	return false
-}
-
-func NewSessionToken() (string, error) {
-	randBytes := make([]byte, 32)
-	_, err := rand.Read(randBytes)
-	if err != nil {
-		return "", err
-	}
-
-	token := base64.URLEncoding.EncodeToString(randBytes)
-	return token, err
 }
 
 func HttpResponse(w http.ResponseWriter, statusCode int, message string) {
