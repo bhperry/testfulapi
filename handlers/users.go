@@ -48,7 +48,6 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 			HttpResponse(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		println(details)
 		json.NewEncoder(w).Encode(details)
 	} else {
 		json.NewEncoder(w).Encode("Hello, world!")
@@ -59,11 +58,15 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 	db := OpenDB()
 	defer db.Close()
 
+	//Decode JSON from the POST request
 	var user User
 	decoder := json.NewDecoder(r.Body)
 	decoder.Decode(&user)
 
+	//Create a UUID for the new user
 	newUuid := uuid.NewV4()
+
+	//Prepare insert query
 	insert, err := db.Prepare("INSERT INTO users VALUES(?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		HttpResponse(w, http.StatusInternalServerError, err.Error())
@@ -71,19 +74,27 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer insert.Close()
 
+	//Get hashed password, and exec the insert query
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	_, err = insert.Exec(newUuid, user.Username, passwordHash, user.Email, user.Address, user.Phone)
 
-	if CheckErr(err) {
+	//Error creating new user
+	if err != nil {
 		if strings.Contains(err.Error(), "Error 1062") {
 			HttpResponse(w, http.StatusConflict, "This username is taken")
 		} else {
 			HttpResponse(w, http.StatusInternalServerError, "Error creating new user")
 		}
-	} else {
-		HttpResponse(w, http.StatusOK, "Successfully created new user")
-		//json.NewEncoder(w).Encode("Successfully created new user")
+		return
 	}
+
+	//Insert any additional data into user_details table
+	err = AddUserDetails(user.Username, user.Extra, db)
+	if err != nil {
+		HttpResponse(w, http.StatusInternalServerError, err.Error())
+	}
+
+	HttpResponse(w, http.StatusOK, "Successfully created new user")
 }
 
 func UserHandler(w http.ResponseWriter, r *http.Request) {
@@ -142,15 +153,22 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 					HttpResponse(w, http.StatusInternalServerError, err.Error())
 					return
 				}
+				defer update.Close()
 
 				_, err = update.Exec(updateValues...)
 				if err != nil {
 					HttpResponse(w, http.StatusInternalServerError, err.Error())
 					return
 				}
-				HttpResponse(w, http.StatusOK, "Updated user")
 			}
 
+			//Insert any additional data into user_details table
+			err := AddUserDetails(username, user.Extra, db)
+			if err != nil {
+				HttpResponse(w, http.StatusInternalServerError, err.Error())
+			}
+
+			HttpResponse(w, http.StatusOK, "Updated user")
 			break
 		}
 		case "DELETE": {
@@ -253,11 +271,21 @@ func GetUserDetails(username string) (map[string]string, error) {
 		return nil, err
 	}
 
-	details["username"] = username
-	details["email"] = email
-	details["address"] = address
-	details["phone"] = phone
+	//Add non-blank details to the string map
+	if username != "" {
+		details["username"] = username
+	}
+	if email != "" {
+		details["email"] = email
+	}
+	if address != "" {
+		details["address"] = address
+	}
+	if phone != "" {
+		details["phone"] = phone
+	}
 
+	//Get custom user details
 	rows, err := db.Query("SELECT attr, val FROM user_details WHERE uuid = ?", userUuid)
 
 	//Return only if the error isn't a NoRows error
@@ -276,4 +304,35 @@ func GetUserDetails(username string) (map[string]string, error) {
 	}
 
 	return details, nil
+}
+
+func AddUserDetails(username string, details map[string]string, db *sql.DB) error {
+	//No need to do anything if no details given
+	if len(details) == 0 {
+		return nil
+	}
+
+	//Get user's UUID to access the user_details table
+	var userUuid string
+	queryUser := "SELECT uuid FROM users WHERE username = ?"
+	err := db.QueryRow(queryUser, username).Scan(&userUuid)
+	if err == sql.ErrNoRows || err != nil {
+		return err
+	}
+
+	//Prepare insert or update statement
+	insertOrUpdate, err := db.Prepare("INSERT INTO user_details VALUES(?, ?, ?) ON DUPLICATE KEY UPDATE val = ?")
+	if err != nil {
+		return err
+	}
+	defer insertOrUpdate.Close()
+
+	//For each detail, insert/update the key,value pair in user_details
+	for k, v := range details {
+		_, err = insertOrUpdate.Exec(userUuid, k, v, v)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
