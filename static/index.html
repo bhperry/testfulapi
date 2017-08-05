@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TESTful API</title>
+
+</head>
+<body>
+    HELLO WORLD!!
+
+</body>
+</html>
+
+<script type="text/javascript">
+    function request(endpoint, params, method) {
+        var url = "http://127.0.0.1:8000";
+        var request = new XMLHttpRequest();
+        request.open(method, url+endpoint, true);
+        request.onload = function() {
+            if (request.status == 200) {
+                try {
+                    var data = JSON.parse(request.responseText);
+                    console.log(data);
+                }
+                catch (error) {
+                    console.log(request.responseText)
+                }
+            }
+            else {
+                console.log(request.responseText)
+            }
+        };
+
+        request.onerror = function() {
+            //Error connecting to server
+            console.log("CONNECTION ERROR");
+        };
+
+        if (method == 'POST') {
+            request.setRequestHeader('Content-type', 'application/json; charset=UTF-8');
+            request.send(JSON.stringify(params));
+        }
+        else {
+            request.send(null);
+        }
+
+//        var form = document.createElement("form");
+//        form.setAttribute("method", method);
+//        form.setAttribute("action", url + endpoint);
+//
+//        for (var key in params) {
+//            if (params.hasOwnProperty(key)) {
+//                var field = document.createElement("input");
+//                field.setAttribute("type", "hidden");
+//                field.setAttribute("name", key);
+//                field.setAttribute("value", params[key]);
+//
+//                form.appendChild(field);
+//            }
+//        }
+//
+//        document.body.appendChild(form);
+//        form.submit();
+    }
+</script>
