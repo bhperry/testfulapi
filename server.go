@@ -9,39 +9,45 @@ import (
 	"github.com/urfave/negroni"
 	"github.com/gorilla/mux"
 	"github.com/bhperry/testfulapi/handlers"
+	"database/sql"
 )
 
-type User struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Email string `json:"email"`
-	Address string `json:"address"`
-	Phone string `json:"phone"`
-	Extra map[string]string `json:"extra"`
-}
+const (
+	//Constants for using mysql database
+	DB_USER string = "root"
+	DB_PASSWORD string = "password1234"
+	DB_SCHEMA string = "userdb"
+)
 
-/** Setup routing handlers and start server listening on port 8000
+/**
+	Setup routing handlers and start the server
  */
 func main() {
 	var dir string
 	flag.StringVar(&dir, "dir", ".", "the directory to serve files from. Defaults to the current dir")
 	flag.Parse()
 
-	//Set max age for session cookies to one day
-	//store.Options = &sessions.Options{
-	//	MaxAge: 86400,
-	//}
+	db := OpenDB()
+	defer db.Close()
+	InitDB(db)
 
-	//Setup endpoints with their handlers
+	//Connect endpoints with their handlers. Handlers wrapped to pass in db connection
 	router := mux.NewRouter()
-	router.HandleFunc("/", handlers.IndexHandler).Methods("GET")
-	router.HandleFunc("/user", handlers.NewUserHandler).Methods("POST")
-	router.HandleFunc("/user/{username}", handlers.UserHandler).Methods("GET", "PUT", "DELETE")
-	router.HandleFunc("/auth", handlers.AuthHandler).Methods("POST", "DELETE")
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		handlers.IndexHandler(w, r, db)
+	}).Methods("GET")
+	router.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		handlers.NewUserHandler(w, r, db)
+	}).Methods("POST")
+	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
+		handlers.UserHandler(w, r, db)
+	}).Methods("GET", "PUT", "DELETE")
+	router.HandleFunc("/auth", func(w http.ResponseWriter, r *http.Request) {
+		handlers.AuthHandler(w, r, db)
+	}).Methods("POST", "DELETE")
 	router.HandleFunc("/utility", handlers.RequestUtilityHandler).Methods("GET")
 
 	n := negroni.New()
-	//n.Use(sessions.Sessions("global_session_store", store))
 	n.UseHandler(router)
 
 	srv := &http.Server{
@@ -51,11 +57,54 @@ func main() {
 		ReadTimeout: 15 * time.Second,
 	}
 	log.Fatal(srv.ListenAndServe())
-	//http.ListenAndServe(":8000", n)
 }
 
-//CREATE TABLE `userdb`.`user_details` (
-//`uuid` CHAR(36) NOT NULL,
-//`key` VARCHAR(200) NOT NULL,
-//`value` VARCHAR(200) NOT NULL,
-//PRIMARY KEY (`uuid`));
+/**
+	Setup a connection to the MySQL database
+ */
+func OpenDB() *sql.DB {
+	var db, err = sql.Open("mysql", DB_USER + ":" + DB_PASSWORD + "@/" + DB_SCHEMA + "?charset=utf8")
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
+/**
+	Check if the schema and tables all exist, and create them if not
+ */
+func InitDB(db *sql.DB) {
+	//userdb schema
+	_, err := db.Query("CREATE DATABASE IF NOT EXISTS " + DB_SCHEMA)
+	if err != nil {
+		panic(err)
+	}
+
+	//users table
+	_, err = db.Query("CREATE TABLE IF NOT EXISTS `users` (" +
+		"`uuid` char(36) NOT NULL," +
+		"`username` varchar(100) NOT NULL," +
+		"`password` varchar(64) NOT NULL," +
+		"`email` varchar(254) DEFAULT NULL," +
+		"`address` varchar(200) DEFAULT NULL," +
+		"`phone` varchar(30) DEFAULT NULL," +
+		"`admin` tinyint(4) DEFAULT '0'," +
+		"PRIMARY KEY (`uuid`)," +
+		"UNIQUE KEY `username_UNIQUE` (`username`)" +
+		");")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = db.Query("CREATE TABLE IF NOT EXISTS `user_details` (" +
+		"`uuid` CHAR(36) NOT NULL," +
+		"`attr` VARCHAR(200) NOT NULL," +
+		"`val` VARCHAR(200) NOT NULL," +
+		"PRIMARY KEY (`uuid`, `attr`)" +
+		");")
+	if err != nil {
+		panic(err)
+	}
+}
+
+

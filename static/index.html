@@ -25,7 +25,7 @@
     <br>
     <input type="text" id="username" placeholder="Username" style="display: none;"/>
     <br>
-    <textarea id="inputArgs" rows="3" cols="50" placeholder="Comma separated Key:Value argument pairs"></textarea>
+    <textarea id="inputArgs" rows="3" cols="50" placeholder="Comma separated Key:Value pairs"></textarea>
     <br>
     <input type="button" onclick="submitRequest()" value="Submit" style="margin-top:20px;"/>
     <br>
@@ -52,29 +52,13 @@
         }
     }
 
-//    function setupInput() {
-//        if (selectMethod == "POST") {
-//            var inputUsername = document.createElement("input");
-//            inputUsername.type = "text";
-//            inputUsername.name = "username";
-//            inputUsername.placeholder = "Username";
-//
-//            var inputPassword = document.createElement("input");
-//            inputPassword.type = "password";
-//            inputPassword.name = "password";
-//            inputPassword.placeholder = "Password";
-//
-//            if (selectEndpoint == "/")
-//        }
-//    }
-
     function submitRequest() {
         var args = document.getElementById("inputArgs").value.split(",");
         var params = {};
         args.forEach(function(arg) {
-            var keyVal = arg.replace("/ /g","").split(":");
+            var keyVal = arg.split(":");
             if (keyVal.length == 2) {
-                params[keyVal[0]] = keyVal[1];
+                params[keyVal[0].trim()] = keyVal[1].trim();
             }
         });
 
@@ -99,6 +83,7 @@
                     responseText.innerText = JSON.stringify(data);
                 }
                 catch (error) {
+                    console.log("NOT JSON!");
                     console.log(request.responseText);
                     responseText.innerText = request.responseText;
                 }

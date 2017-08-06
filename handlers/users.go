@@ -15,30 +15,23 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"io/ioutil"
 	"io"
+	"strconv"
 )
 
-//Constants for using mysql database
-const (
-	DB_USER string = "root"
-	DB_PASSWORD string = "password1234"
-	DB_SCHEMA string = "userdb"
-
-	DUPLICATE_ENTRY_ERROR string = "Error 1062"
-)
+const DUPLICATE_ENTRY_ERROR string = "Error 1062"
 
 //Session data store
 var store = sessions.NewCookieStore([]byte("super-duper-ultra-mega-secret-key"))
 
 //Used for determining what data goes in user table and what goes in user_details
-var primaryUserData = map[string]bool{"username":true, "password":true, "email":true, "address":true, "phone":true}
-
+var primaryUserData = map[string]bool{"username":true, "password":true, "email":true, "address":true, "phone":true, "admin":true}
 
 /**
 	Handles GET /
 	Return welcome message to unauthenticated users
 	Return user JSON data otherwise
  */
-func IndexHandler(w http.ResponseWriter, r *http.Request) {
+func IndexHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	//Get user's session data
 	session, err := store.Get(r, "session")
 	if CheckError(err, w) { return }
@@ -46,14 +39,16 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	//If authenticated output user data, else output a happy message
 	if session.Values["authenticated"] != nil {
 		username := fmt.Sprintf("%s", session.Values["username"])
-		details, err := GetUserDetails(username)
+
+		//Get user data
+		details, err := GetUserDetails(username, db)
 		if CheckError(err, w) { return }
 
 		//Return user JSON data to the client
-		json.NewEncoder(w).Encode(details)
+		json.NewEncoder(w).Encode(map[string]interface{}{"user":details})
 	} else {
 		//Return default message to unauthenticated user
-		json.NewEncoder(w).Encode("Hello, world!")
+		json.NewEncoder(w).Encode(map[string]string{"message": "Hello, world!"})
 	}
 }
 
@@ -62,34 +57,61 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	Create a new user in the database with the data supplied
 	Assigns a UUID, and hashes the password before storing
  */
-func NewUserHandler(w http.ResponseWriter, r *http.Request) {
-	db := OpenDB()
-	defer db.Close()
+func NewUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	//Get user's session data
+	session, _ := store.Get(r, "session")
+	authenticated := session.Values["authenticated"]
+	currentUserIsAdmin := false
+	if authenticated != nil {
+		currentUser := fmt.Sprintf("%s", session.Values["username"])
+		currentUserIsAdmin = IsAdmin(currentUser, db)
+	}
 
 	//Get JSON data from POST request
 	userData, err := DecodeJson(r.Body)
 	if CheckError(err, w) { return }
 
-
 	//Check if username and password are valid
-	username, validUsername := userData["username"]
-	password, validPassword := userData["password"]
-	if !validUsername || !validPassword || len(username) == 0 || len(password) == 0 {
-		HttpResponse(w, http.StatusBadRequest, "Invalid username or password")
+	username := userData["username"]
+	password := userData["password"]
+	if username == "" || password == "" {
+		http.Error(w, "Invalid username or password", http.StatusBadRequest)
 		return
 	}
 
 	//Create a UUID for the new user
 	newUuid := uuid.NewV4()
+	//Get salted and hashed password
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 
-	//Prepare insert query
-	insert, err := db.Prepare("INSERT INTO users VALUES(?, ?, ?, ?, ?, ?)")
+	//Build the sql query
+	newUserQuery := "INSERT INTO users(uuid, username, password, email, address, phone"
+	newUserValues := make([]interface{}, 0)
+	newUserValues = append(newUserValues, newUuid, username, passwordHash, userData["email"], userData["address"], userData["phone"])
+
+	//Only allow authenticated admins to create new admin accounts
+	newUserIsAdmin, _ := strconv.ParseBool(userData["admin"])
+	if newUserIsAdmin && currentUserIsAdmin {
+		newUserQuery += ", admin) VALUES(?, ?, ?, ?, ?, ?, ?)"
+		newUserValues = append(newUserValues, newUserIsAdmin)
+	} else {
+		newUserQuery += ") VALUES(?, ?, ?, ?, ?, ?)"
+	}
+
+	//Prepare and exec the insert query
+	insert, err := db.Prepare(newUserQuery)
 	if CheckError(err, w) { return }
 	defer insert.Close()
 
-	//Get hashed password, and exec the insert query
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	_, err = insert.Exec(newUuid, username, passwordHash, userData["email"], userData["address"], userData["phone"])
+	_, err = insert.Exec(newUserValues...)
+	if err != nil {
+		if strings.Contains(err.Error(), DUPLICATE_ENTRY_ERROR) {
+			http.Error(w, "This username is taken", http.StatusConflict)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
 
 	//Remove the primary data from the map
 	for k := range userData {
@@ -98,21 +120,11 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	//Error creating new user
-	if err != nil {
-		if strings.Contains(err.Error(), DUPLICATE_ENTRY_ERROR) {
-			HttpResponse(w, http.StatusConflict, "This username is taken")
-		} else {
-			HttpResponse(w, http.StatusInternalServerError, err.Error())
-		}
-		return
-	}
-
 	//Insert any additional data into user_details table
 	err = AddUserDetails(username, userData, db)
 	if CheckError(err, w) { return }
 
-	HttpResponse(w, http.StatusOK, "Successfully created new user")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Successfully created new user"})
 }
 
 /**
@@ -121,7 +133,7 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 	Put updates in user DB if authorized
 	Delete user from DB if authorized
  */
-func UserHandler(w http.ResponseWriter, r *http.Request) {
+func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
 	authenticated := session.Values["authenticated"]
@@ -129,26 +141,27 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 
 	if authenticated != nil {
 		//Check is current user is allowed to access requested data
-		username := fmt.Sprintf("%s", session.Values["username"])
-		if username != vars["username"] {
-			HttpResponse(w, http.StatusUnauthorized, "Unauthorized to access this user's data")
+		requestedUser := vars["username"]
+		currentUser := fmt.Sprintf("%s", session.Values["username"])
+		currentUserIsAdmin := IsAdmin(currentUser, db)
+		//If authenticated user is not admin, don't give access to other users
+		if requestedUser != currentUser && !currentUserIsAdmin {
+			http.Error(w, "Unauthorized to access requested user's data", http.StatusUnauthorized)
 			return
 		}
 
 		switch r.Method {
 		//Return the user's data
 		case "GET": {
-			details, err := GetUserDetails(username)
+			details, err := GetUserDetails(requestedUser, db)
 			if CheckError(err, w) { return }
 
-			json.NewEncoder(w).Encode(details)
+			//Return JSON user data to the client
+			json.NewEncoder(w).Encode(map[string]interface{}{"user":details})
 			break
 		}
 		//Update the user's data
 		case "PUT": {
-			db := OpenDB()
-			defer db.Close()
-
 			//Get JSON data from PUT request
 			userData, err := DecodeJson(r.Body)
 			if CheckError(err, w) { return }
@@ -165,9 +178,19 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 						//Not handling updating username or password, as per Challenge DOC
 						delete(userData, k)
 					} else {
-						updateString += fmt.Sprintf(" %s = ?", k)
-						updateValues = append(updateValues, v)
-						//Remove data that has been used (AMAZING THAT GO LETS YOU DO THIS!!!!)
+						//Only allow admins to set the admin property
+						if k == "admin" && currentUserIsAdmin {
+							//Only set the property if a real boolean value was given
+							setAdmin, err := strconv.ParseBool(v)
+							if err == nil {
+								updateString += fmt.Sprintf(" %s = ?", k)
+								updateValues = append(updateValues, setAdmin)
+							}
+						} else {
+							updateString += fmt.Sprintf(" %s = ?", k)
+							updateValues = append(updateValues, v)
+						}
+						//Remove data that has been used
 						delete(userData, k)
 					}
 				}
@@ -175,37 +198,35 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 
 			//Run update on users table if any primary data was changed
 			if updateString != "" {
-				update, err := db.Prepare("UPDATE users SET" + updateString + " WHERE username='" + username + "'")
+				//Prepare statement
+				update, err := db.Prepare("UPDATE users SET" + updateString + " WHERE username = ?")
 				if CheckError(err, w) { return }
 				defer update.Close()
+
+				//Add requested username to values slice for passing into Exec
+				updateValues = append(updateValues, requestedUser)
 
 				_, err = update.Exec(updateValues...)
 				if CheckError(err, w) { return }
 			}
 
 			//Insert any extra data into user_details table
-			err = AddUserDetails(username, userData, db)
+			err = AddUserDetails(requestedUser, userData, db)
 			if CheckError(err, w) { return }
 
-			HttpResponse(w, http.StatusOK, "Updated user")
+			json.NewEncoder(w).Encode(map[string]string{"message": "Updated user"})
 			break
 		}
 		case "DELETE": {
-			db := OpenDB()
-			defer db.Close()
-
 			//Get UUID to delete any additional data in user_details table
-			userUuid, err := GetUUID(username, db)
+			userUuid, err := GetUUID(requestedUser, db)
 			if CheckError(err, w) { return }
-
-
-			println(username)
 
 			//Delete user record from DB
 			deleteQuery, err := db.Prepare("DELETE FROM users WHERE username = ?")
 			if CheckError(err, w) { return }
 			defer deleteQuery.Close()
-			deleteQuery.Exec(username)
+			deleteQuery.Exec(requestedUser)
 
 			//Delete user details from DB
 			deleteDetailsQuery, err := db.Prepare("DELETE FROM user_details WHERE uuid = ?")
@@ -214,15 +235,17 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 			_, err = deleteDetailsQuery.Exec(userUuid)
 			CheckError(err, w)
 
-			//Expire the deleted user's session token
-			session.Options.MaxAge = -1
-			session.Save(r, w)
-			HttpResponse(w, http.StatusOK, "User deleted")
+			if currentUser == requestedUser {
+				//Expire the deleted user's session token
+				session.Options.MaxAge = -1
+				session.Save(r, w)
+				json.NewEncoder(w).Encode(map[string]string{"message": "User deleted"})
+			}
 			break
 		}
 		}
 	} else {
-		HttpResponse(w, http.StatusUnauthorized, "Unauthenticated")
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
 	}
 }
 
@@ -231,16 +254,13 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 	Post user's credentials to get session token
 	Delete current user's session token
  */
-func AuthHandler(w http.ResponseWriter, r *http.Request) {
+func AuthHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
 
 	switch r.Method {
 	//Authenticate user's login data
 	case "POST": {
-		db := OpenDB()
-		defer db.Close()
-
 		//Decode JSON from POST request
 		type UserLogin struct {
 			Username string `json:"username"`
@@ -251,21 +271,22 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 		decoder.Decode(&login)
 
 		if login.Username == "" || login.Password == "" {
-			HttpResponse(w, http.StatusBadRequest, "Invalid login credentials")
+			http.Error(w, "Invalid login credentials", http.StatusBadRequest)
+			return
 		}
 
 		//Check if the username exists and correct password was entered
 		var hashedPassword string
 		err := db.QueryRow("SELECT password FROM users WHERE username = ?", login.Username).Scan(&hashedPassword)
 		if err == sql.ErrNoRows || err != nil {
-			HttpResponse(w, http.StatusUnauthorized, "Invalid username")
+			http.Error(w, "Invalid username", http.StatusUnauthorized)
 			return
 		}
 
 		//Compare hashed password and user provided password
 		err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(login.Password))
 		if err == bcrypt.ErrMismatchedHashAndPassword {
-			HttpResponse(w, http.StatusUnauthorized, "Invalid password")
+			http.Error(w, "Invalid password", http.StatusUnauthorized)
 			return
 		}
 
@@ -273,15 +294,20 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 		session.Values["username"] = login.Username
 		session.Values["authenticated"] = true
 		session.Save(r, w)
-		HttpResponse(w, http.StatusOK, "Authenticated")
+		json.NewEncoder(w).Encode(map[string]string{"message": "Authenticated"})
 		break
 	}
 	//Clear the current user's session
 	case "DELETE": {
+		authenticated := session.Values["authenticated"]
+		if authenticated == nil {
+			http.Error(w, "No session found", http.StatusUnauthorized)
+			return
+		}
 		//Set cookie to expire immediately
 		session.Options.MaxAge = -1
 		session.Save(r, w)
-		HttpResponse(w, http.StatusOK, "Session deleted")
+		json.NewEncoder(w).Encode(map[string]string{"message": "Session deleted"})
 		break
 	}
 	}
@@ -305,44 +331,21 @@ func RequestUtilityHandler(w http.ResponseWriter, r *http.Request) {
  */
 func CheckError(err error, w http.ResponseWriter) bool {
 	if err != nil {
-		HttpResponse(w, http.StatusInternalServerError, err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return true
 	}
 	return false
 }
 
 /**
-	Helper method for writing messages to the client
- */
-func HttpResponse(w http.ResponseWriter, statusCode int, message string) {
-	w.WriteHeader(statusCode)
-	w.Write([]byte(message))
-}
-
-/**
-	Open a connection to the MySQL database
- */
-func OpenDB() *sql.DB {
-	var db, err = sql.Open("mysql", DB_USER + ":" + DB_PASSWORD + "@/" + DB_SCHEMA + "?charset=utf8")
-	if err != nil {
-		panic(err)
-	}
-	return db
-}
-
-/**
 	Collect all data pertaining to the given user in a string map
  */
-func GetUserDetails(username string) (map[string]string, error) {
-	db := OpenDB()
-	defer db.Close()
-
+func GetUserDetails(username string, db *sql.DB) (map[string]string, error) {
 	details := make(map[string]string)
 	var userUuid, email, address, phone string
 	queryUser := "SELECT uuid, email, address, phone FROM users WHERE username = ?"
 	err := db.QueryRow(queryUser, username).Scan(&userUuid, &email, &address, &phone)
 	if err == sql.ErrNoRows || err != nil {
-		//HttpResponse(w, http.StatusInternalServerError, err.Error())
 		return nil, err
 	}
 
@@ -425,6 +428,18 @@ func GetUUID(username string, db *sql.DB) (string, error) {
 		return "", err
 	}
 	return userUuid, nil
+}
+
+/**
+	Determine if the given user is an admin
+ */
+func IsAdmin(username string, db *sql.DB) bool {
+	var isAdmin bool
+	err := db.QueryRow("SELECT admin FROM users WHERE username = ?", username).Scan(&isAdmin)
+	if err != nil {
+		return false
+	}
+	return isAdmin
 }
 
 /**
