@@ -6,13 +6,88 @@
 
 </head>
 <body>
-    HELLO WORLD!!
+    <label for="selectMethod">Method</label>
+    <select id="selectMethod" onchange="changeMethod(this.value)">
+        <option value="GET">GET</option>
+        <option value="POST">POST</option>
+        <option value="PUT">PUT</option>
+        <option value="DELETE">DELETE</option>
+    </select>
 
+    <label for="selectEndpoint">Endpoint</label>
+    <select id="selectEndpoint" onchange="changeEndpoint(this.value)">
+        <option value="/">/</option>
+        <option value="/user">/user</option>
+        <option value="/user/{username}">/user/{username}</option>
+        <option value="/auth">/auth</option>
+    </select>
+    <br>
+    <br>
+    <input type="text" id="username" placeholder="Username" style="display: none;"/>
+    <br>
+    <textarea id="inputArgs" rows="3" cols="50" placeholder="Comma separated Key:Value argument pairs"></textarea>
+    <br>
+    <input type="button" onclick="submitRequest()" value="Submit" style="margin-top:20px;"/>
+    <br>
+    <br>
+    <div id="responseText"></div>
 </body>
 </html>
 
 <script type="text/javascript">
+    var selectMethod = "GET";
+    var selectEndpoint = "/";
+
+    function changeMethod(method) {
+        selectMethod = method;
+    }
+
+    function changeEndpoint(endpoint) {
+        selectEndpoint = endpoint;
+        if (endpoint == "/user/{username}") {
+            document.getElementById("username").style.display = "block";
+        }
+        else {
+            document.getElementById("username").style.display = "none";
+        }
+    }
+
+//    function setupInput() {
+//        if (selectMethod == "POST") {
+//            var inputUsername = document.createElement("input");
+//            inputUsername.type = "text";
+//            inputUsername.name = "username";
+//            inputUsername.placeholder = "Username";
+//
+//            var inputPassword = document.createElement("input");
+//            inputPassword.type = "password";
+//            inputPassword.name = "password";
+//            inputPassword.placeholder = "Password";
+//
+//            if (selectEndpoint == "/")
+//        }
+//    }
+
+    function submitRequest() {
+        var args = document.getElementById("inputArgs").value.split(",");
+        var params = {};
+        args.forEach(function(arg) {
+            var keyVal = arg.replace("/ /g","").split(":");
+            if (keyVal.length == 2) {
+                params[keyVal[0]] = keyVal[1];
+            }
+        });
+
+        var endpoint = selectEndpoint;
+        if (selectEndpoint == "/user/{username}") {
+            endpoint = selectEndpoint.split("{")[0] + document.getElementById("username").value
+        }
+        request(endpoint, params, selectMethod);
+    }
+
     function request(endpoint, params, method) {
+        var responseText = document.getElementById("responseText");
+
         var url = "http://127.0.0.1:8000";
         var request = new XMLHttpRequest();
         request.open(method, url+endpoint, true);
@@ -21,45 +96,31 @@
                 try {
                     var data = JSON.parse(request.responseText);
                     console.log(data);
+                    responseText.innerText = JSON.stringify(data);
                 }
                 catch (error) {
-                    console.log(request.responseText)
+                    console.log(request.responseText);
+                    responseText.innerText = request.responseText;
                 }
             }
             else {
-                console.log(request.responseText)
+                console.log(request.responseText);
+                responseText.innerText = request.responseText;
             }
         };
 
         request.onerror = function() {
             //Error connecting to server
             console.log("CONNECTION ERROR");
+            responseText.innerText = "CONNECTION ERROR";
         };
 
-        if (method == 'POST') {
-            request.setRequestHeader('Content-type', 'application/json; charset=UTF-8');
+        if (method == "POST" || method == "PUT") {
+            request.setRequestHeader("Content-type", "application/json; charset=UTF-8");
             request.send(JSON.stringify(params));
         }
         else {
             request.send(null);
         }
-
-//        var form = document.createElement("form");
-//        form.setAttribute("method", method);
-//        form.setAttribute("action", url + endpoint);
-//
-//        for (var key in params) {
-//            if (params.hasOwnProperty(key)) {
-//                var field = document.createElement("input");
-//                field.setAttribute("type", "hidden");
-//                field.setAttribute("name", key);
-//                field.setAttribute("value", params[key]);
-//
-//                form.appendChild(field);
-//            }
-//        }
-//
-//        document.body.appendChild(form);
-//        form.submit();
     }
 </script>
