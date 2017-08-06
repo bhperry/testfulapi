@@ -32,6 +32,12 @@ var store = sessions.NewCookieStore([]byte("super-duper-ultra-mega-secret-key"))
 //Used for determining what data goes in user table and what goes in user_details
 var primaryUserData = map[string]bool{"username":true, "password":true, "email":true, "address":true, "phone":true}
 
+
+/**
+	Handles GET /
+	Return welcome message to unauthenticated users
+	Return user JSON data otherwise
+ */
 func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, err := store.Get(r, "session")
@@ -51,6 +57,11 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/**
+	Handles POST /user
+	Create a new user in the database with the data supplied
+	Assigns a UUID, and hashes the password before storing
+ */
 func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 	db := OpenDB()
 	defer db.Close()
@@ -104,6 +115,12 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 	HttpResponse(w, http.StatusOK, "Successfully created new user")
 }
 
+/**
+	Handles GET, PUT, DELETE /user/{username}
+	Get user data as JSON
+	Put updates in user DB if authorized
+	Delete user from DB if authorized
+ */
 func UserHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
@@ -209,6 +226,11 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/**
+	Handles POST, DELETE /auth
+	Post user's credentials to get session token
+	Delete current user's session token
+ */
 func AuthHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
@@ -265,10 +287,22 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/**
+	Handles GET /utility
+	Serves the request utility for easy access to API
+ */
 func RequestUtilityHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w,r, "static/index.html")
 }
 
+
+/*====================================== HELPER METHODS  ======================================*/
+
+
+/**
+	Check if an internal server error has occurred,
+	and send error message to client if needed
+ */
 func CheckError(err error, w http.ResponseWriter) bool {
 	if err != nil {
 		HttpResponse(w, http.StatusInternalServerError, err.Error())
@@ -277,21 +311,28 @@ func CheckError(err error, w http.ResponseWriter) bool {
 	return false
 }
 
+/**
+	Helper method for writing messages to the client
+ */
 func HttpResponse(w http.ResponseWriter, statusCode int, message string) {
 	w.WriteHeader(statusCode)
 	w.Write([]byte(message))
 }
 
+/**
+	Open a connection to the MySQL database
+ */
 func OpenDB() *sql.DB {
-	//Open database connection
 	var db, err = sql.Open("mysql", DB_USER + ":" + DB_PASSWORD + "@/" + DB_SCHEMA + "?charset=utf8")
 	if err != nil {
 		panic(err)
 	}
-
 	return db
 }
 
+/**
+	Collect all data pertaining to the given user in a string map
+ */
 func GetUserDetails(username string) (map[string]string, error) {
 	db := OpenDB()
 	defer db.Close()
@@ -340,13 +381,16 @@ func GetUserDetails(username string) (map[string]string, error) {
 	return details, nil
 }
 
+/**
+	Insert or update any extra data for a user
+		(anything besides the basics given in the Coding Challenge doc)
+	TODO: Delete data at Key if Value = ""?
+ */
 func AddUserDetails(username string, details map[string]string, db *sql.DB) error {
 	//No need to do anything if no details given
-
-	//if len(details) == 0 {
-	//	println("NOTHING TPO ADD!!")
-	//	return nil
-	//}
+	if len(details) == 0 {
+		return nil
+	}
 
 	//Get user's UUID to access the user_details table
 	userUuid, err := GetUUID(username, db)
@@ -370,7 +414,9 @@ func AddUserDetails(username string, details map[string]string, db *sql.DB) erro
 	}
 	return nil
 }
-
+/**
+	Gets the UUID for the given username
+ */
 func GetUUID(username string, db *sql.DB) (string, error) {
 	var userUuid string
 	queryUser := "SELECT uuid FROM users WHERE username = ?"
@@ -381,15 +427,24 @@ func GetUUID(username string, db *sql.DB) (string, error) {
 	return userUuid, nil
 }
 
+/**
+	Decode JSON data from a request Body and return as a string map
+ */
 func DecodeJson(body io.ReadCloser) (map[string]string, error) {
+	//Get byte data
 	data, _ := ioutil.ReadAll(body)
+
+	//Unmarshal into an interface
 	var f interface{}
 	err := json.Unmarshal(data, &f)
 	if err != nil {
 		return nil, err
 	}
+
+	//Assert underlying structure of the interface
 	jsonMap := f.(map[string]interface{})
 
+	//Convert interface map into a string map
 	userData := make(map[string]string)
 	for k, v := range jsonMap {
 		userData[k] = v.(string)
