@@ -241,22 +241,11 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 	case "DELETE": {
-		//Get UUID to delete any additional data in user_details table
-		//userUuid, err := GetUUID(requestedUser)
-		//if CheckError(err, w) { return }
-
 		//Delete user record from DB
 		deleteQuery, err := db.Prepare("DELETE FROM users WHERE username = ?")
 		if CheckError(err, w) { return }
 		defer deleteQuery.Close()
 		deleteQuery.Exec(requestedUser)
-
-		////Delete user details from DB
-		//deleteDetailsQuery, err := db.Prepare("DELETE FROM user_details WHERE uuid = ?")
-		//if CheckError(err, w) { return }
-		//defer deleteDetailsQuery.Close()
-		//_, err = deleteDetailsQuery.Exec(userUuid)
-		//CheckError(err, w)
 
 		if currentUser == requestedUser {
 			//Expire the deleted user's session token
