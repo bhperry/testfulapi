@@ -19,6 +19,7 @@ import (
 	"github.com/go-redis/redis"
 
 	"golang.org/x/crypto/bcrypt"
+	"log"
 )
 
 const (
@@ -490,7 +491,7 @@ func OpenDB() *sql.DB {
 	var err error
 	db, err = sql.Open("mysql", DB_USER + ":" + DB_PASSWORD + "@/" + DB_NAME + "?charset=utf8")
 	if err != nil {
-		panic(err)
+		log.Fatal(err.Error())
 	}
 	return db
 }
@@ -502,7 +503,7 @@ func OpenTestDB() *sql.DB {
 	var err error
 	db, err = sql.Open("testdb", "")
 	if err != nil {
-		panic(err)
+		log.Fatal(err.Error())
 	}
 	return db
 }
@@ -514,12 +515,12 @@ func InitDB() {
 	//userdb schema
 	_, err := db.Exec("CREATE SCHEMA IF NOT EXISTS " + DB_SCHEMA)
 	if err != nil {
-		panic(err)
+		log.Fatal(err.Error())
 	}
 
 	_,err = db.Exec("USE " + DB_SCHEMA)
 	if err != nil {
-		panic(err)
+		log.Fatal(err.Error())
 	}
 
 	//users table
@@ -535,7 +536,7 @@ func InitDB() {
 		"UNIQUE KEY `username_UNIQUE` (`username`)" +
 		");")
 	if err != nil {
-		panic(err)
+		log.Fatal(err.Error())
 	}
 
 	_, err = db.Exec("CREATE TABLE IF NOT EXISTS `user_details` (" +
@@ -548,7 +549,7 @@ func InitDB() {
 			"ON DELETE CASCADE" +
 		");")
 	if err != nil {
-		panic(err)
+		log.Fatal(err.Error())
 	}
 }
 
@@ -558,6 +559,12 @@ func NewRedisClient() *redis.Client {
 		Password: REDIS_CLIENT_PASSWORD,
 		DB: REDIS_DB,
 	})
+
+	_, err := redisClient.Ping().Result()
+	if err != nil {
+		log.Fatal("Unable to connect to Redis DB at ", REDIS_CLIENT_ADDR)
+	}
+
 	return redisClient
 }
 
