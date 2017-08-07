@@ -9,6 +9,9 @@ import (
 	"github.com/urfave/negroni"
 	"github.com/gorilla/mux"
 	"github.com/bhperry/testfulapi/handlers"
+
+	//Added so as to grab testing package on initial 'go get' command
+	_"github.com/erikstmartin/go-testdb"
 )
 
 /**
