@@ -25,7 +25,8 @@ const (
 	//Constants for using mysql database
 	DB_USER string = "root"
 	DB_PASSWORD string = "password1234"
-	DB_SCHEMA string = "userdb"
+	DB_NAME string = "userdb"
+	DB_SCHEMA string = "userschema"
 	DUPLICATE_ENTRY_ERROR string = "Error 1062"
 
 	//Redis constants
@@ -498,7 +499,7 @@ func DecodeJson(body io.ReadCloser) (map[string]string, error) {
  */
 func OpenDB() *sql.DB {
 	var err error
-	db, err = sql.Open("mysql", DB_USER + ":" + DB_PASSWORD + "@/" + DB_SCHEMA + "?charset=utf8")
+	db, err = sql.Open("mysql", DB_USER + ":" + DB_PASSWORD + "@/" + DB_NAME + "?charset=utf8")
 	if err != nil {
 		panic(err)
 	}
@@ -522,13 +523,19 @@ func OpenTestDB() *sql.DB {
  */
 func InitDB() {
 	//userdb schema
-	_, err := db.Query("CREATE DATABASE IF NOT EXISTS " + DB_SCHEMA)
+	_, err := db.Exec("CREATE SCHEMA IF NOT EXISTS " + DB_SCHEMA)
 	if err != nil {
 		panic(err)
 	}
 
+	_,err = db.Exec("USE " + DB_SCHEMA)
+	if err != nil {
+		panic(err)
+	}
+
+	println("Create users")
 	//users table
-	_, err = db.Query("CREATE TABLE IF NOT EXISTS `users` (" +
+	_, err = db.Exec("CREATE TABLE IF NOT EXISTS `users` (" +
 		"`uuid` char(36) NOT NULL," +
 		"`username` varchar(100) NOT NULL," +
 		"`password` varchar(64) NOT NULL," +
@@ -543,7 +550,8 @@ func InitDB() {
 		panic(err)
 	}
 
-	_, err = db.Query("CREATE TABLE IF NOT EXISTS `user_details` (" +
+	println("Create user_details")
+	_, err = db.Exec("CREATE TABLE IF NOT EXISTS `user_details` (" +
 		"`uuid` CHAR(36) NOT NULL," +
 		"`attr` VARCHAR(200) NOT NULL," +
 		"`val` VARCHAR(200) NOT NULL," +
