@@ -15,12 +15,15 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"errors"
+	"time"
 )
 
 const BHPERRY_UUID = "cb713068-8278-457a-a782-69e6e8a4efae"
 const BHPERRY_HASEHD_PASSWORD = "$2a$10$tc7FyzbvIOEk00Yr9jcdiO4b6qmaqFiiQ1Va.3uE0BsFZGgJc/tau"
 
 var db, _ = sql.Open("testdb", "")
+
+var redisClient = handlers.NewRedisClient()
 
 //Used to simulate return from a sql exec statement (like INSERT)
 type testResult struct{
@@ -664,6 +667,7 @@ func AuthenticateRequest(w http.ResponseWriter, r *http.Request, username string
 	store := sessions.NewCookieStore([]byte("super-duper-ultra-mega-secret-key"))
 	session,_ := store.Get(r, "session")
 	session.Values["username"] = username
-	session.Values["authenticated"] = true
 	session.Save(r, w)
+
+	redisClient.Set(username, true, 86400 * time.Second)
 }

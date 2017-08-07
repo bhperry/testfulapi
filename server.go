@@ -31,6 +31,9 @@ func main() {
 	defer db.Close()
 	InitDB(db)
 
+	redisClient := handlers.NewRedisClient()
+	defer redisClient.Close()
+
 	//Connect endpoints with their handlers. Handlers wrapped to pass in db connection
 	router := mux.NewRouter()
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

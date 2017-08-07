@@ -11,20 +11,32 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/satori/go.uuid"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-redis/redis"
 
 	"golang.org/x/crypto/bcrypt"
 	"io/ioutil"
 	"io"
 	"strconv"
+	"time"
+	"errors"
 )
 
 const DUPLICATE_ENTRY_ERROR string = "Error 1062"
+
+const (
+	REDIS_CLIENT_ADDR string = "localhost:6379"
+	REDIS_CLIENT_PASSWORD string = ""
+	REDIS_DB int = 0
+)
 
 //Session data store
 var store = sessions.NewCookieStore([]byte("super-duper-ultra-mega-secret-key"))
 
 //Used for determining what data goes in user table and what goes in user_details
 var primaryUserData = map[string]bool{"username":true, "password":true, "email":true, "address":true, "phone":true, "admin":true}
+
+var redisClient *redis.Client
+
 
 /**
 	Handles GET /
@@ -36,12 +48,11 @@ func IndexHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	session, err := store.Get(r, "session")
 	if CheckError(err, w) { return }
 
+	currentUser, err := CheckAuthentication(session.Values["username"])
 	//If authenticated output user data, else output a happy message
-	if session.Values["authenticated"] != nil {
-		username := fmt.Sprintf("%s", session.Values["username"])
-
+	if err == nil {
 		//Get user data
-		details, err := GetUserDetails(username, db)
+		details, err := GetUserDetails(currentUser, db)
 		if CheckError(err, w) { return }
 
 		//Return user JSON data to the client
@@ -60,10 +71,10 @@ func IndexHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 func NewUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
-	authenticated := session.Values["authenticated"]
+
+	currentUser, err := CheckAuthentication(session.Values["username"])
 	currentUserIsAdmin := false
-	if authenticated != nil {
-		currentUser := fmt.Sprintf("%s", session.Values["username"])
+	if err == nil {
 		currentUserIsAdmin = IsAdmin(currentUser, db)
 	}
 
@@ -136,116 +147,118 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
-	authenticated := session.Values["authenticated"]
 	vars := mux.Vars(r)
 
-	if authenticated != nil {
-		//Check is current user is allowed to access requested data
-		requestedUser := vars["username"]
-		currentUser := fmt.Sprintf("%s", session.Values["username"])
-		currentUserIsAdmin := IsAdmin(currentUser, db)
-		//If authenticated user is not admin, don't give access to other users
-		if requestedUser != currentUser && !currentUserIsAdmin {
-			http.Error(w, "Unauthorized to access requested user's data", http.StatusUnauthorized)
-			return
-		}
+	currentUser, err := CheckAuthentication(session.Values["username"])
+	if err != nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
 
-		switch r.Method {
-		//Return the user's data
-		case "GET": {
-			details, err := GetUserDetails(requestedUser, db)
-			if CheckError(err, w) { return }
+	//Check is current user is allowed to access requested data
+	requestedUser := vars["username"]
+	currentUserIsAdmin := IsAdmin(currentUser, db)
 
-			//Return JSON user data to the client
-			json.NewEncoder(w).Encode(map[string]interface{}{"user":details})
-			break
-		}
-		//Update the user's data
-		case "PUT": {
-			//Get JSON data from PUT request
-			userData, err := DecodeJson(r.Body)
-			if CheckError(err, w) { return }
+	//If authenticated user is not admin, don't give access to other users
+	if requestedUser != currentUser && !currentUserIsAdmin {
+		http.Error(w, "Unauthorized to access requested user's data", http.StatusUnauthorized)
+		return
+	}
 
-			//Query string to be built based on values supplied
-			updateString := ""
-			//Interface slices to pass into Exec statement
-			updateValues := make([]interface{}, 0)
+	switch r.Method {
+	//Return the user's data
+	case "GET": {
+		details, err := GetUserDetails(requestedUser, db)
+		if CheckError(err, w) { return }
 
-			//Pull out the primary user data from the map and add to user update query
-			for k, v := range userData {
-				if _, ok := primaryUserData[k]; ok {
-					if k == "username" || k == "password" {
-						//Not handling updating username or password, as per Challenge DOC
-						delete(userData, k)
-					} else {
-						//Only allow admins to set the admin property
-						if k == "admin" && currentUserIsAdmin {
-							//Only set the property if a real boolean value was given
-							setAdmin, err := strconv.ParseBool(v)
-							if err == nil {
-								updateString += fmt.Sprintf(" %s = ?", k)
-								updateValues = append(updateValues, setAdmin)
-							}
-						} else {
+		//Return JSON user data to the client
+		json.NewEncoder(w).Encode(map[string]interface{}{"user":details})
+		break
+	}
+	//Update the user's data
+	case "PUT": {
+		//Get JSON data from PUT request
+		userData, err := DecodeJson(r.Body)
+		if CheckError(err, w) { return }
+
+		//Query string to be built based on values supplied
+		updateString := ""
+		//Interface slices to pass into Exec statement
+		updateValues := make([]interface{}, 0)
+
+		//Pull out the primary user data from the map and add to user update query
+		for k, v := range userData {
+			if _, ok := primaryUserData[k]; ok {
+				if k == "username" || k == "password" {
+					//Not handling updating username or password, as per Challenge DOC
+					delete(userData, k)
+				} else {
+					//Only allow admins to set the admin property
+					if k == "admin" && currentUserIsAdmin {
+						//Only set the property if a real boolean value was given
+						setAdmin, err := strconv.ParseBool(v)
+						if err == nil {
 							updateString += fmt.Sprintf(" %s = ?", k)
-							updateValues = append(updateValues, v)
+							updateValues = append(updateValues, setAdmin)
 						}
-						//Remove data that has been used
-						delete(userData, k)
+					} else {
+						updateString += fmt.Sprintf(" %s = ?", k)
+						updateValues = append(updateValues, v)
 					}
+					//Remove data that has been used
+					delete(userData, k)
 				}
 			}
-
-			//Run update on users table if any primary data was changed
-			if updateString != "" {
-				//Prepare statement
-				update, err := db.Prepare("UPDATE users SET" + updateString + " WHERE username = ?")
-				if CheckError(err, w) { return }
-				defer update.Close()
-
-				//Add requested username to values slice for passing into Exec
-				updateValues = append(updateValues, requestedUser)
-
-				_, err = update.Exec(updateValues...)
-				if CheckError(err, w) { return }
-			}
-
-			//Insert any extra data into user_details table
-			err = AddUserDetails(requestedUser, userData, db)
-			if CheckError(err, w) { return }
-
-			json.NewEncoder(w).Encode(map[string]string{"message": "Updated user"})
-			break
 		}
-		case "DELETE": {
-			//Get UUID to delete any additional data in user_details table
-			userUuid, err := GetUUID(requestedUser, db)
-			if CheckError(err, w) { return }
 
-			//Delete user record from DB
-			deleteQuery, err := db.Prepare("DELETE FROM users WHERE username = ?")
+		//Run update on users table if any primary data was changed
+		if updateString != "" {
+			//Prepare statement
+			update, err := db.Prepare("UPDATE users SET" + updateString + " WHERE username = ?")
 			if CheckError(err, w) { return }
-			defer deleteQuery.Close()
-			deleteQuery.Exec(requestedUser)
+			defer update.Close()
 
-			//Delete user details from DB
-			deleteDetailsQuery, err := db.Prepare("DELETE FROM user_details WHERE uuid = ?")
+			//Add requested username to values slice for passing into Exec
+			updateValues = append(updateValues, requestedUser)
+
+			_, err = update.Exec(updateValues...)
 			if CheckError(err, w) { return }
-			defer deleteDetailsQuery.Close()
-			_, err = deleteDetailsQuery.Exec(userUuid)
-			CheckError(err, w)
-
-			if currentUser == requestedUser {
-				//Expire the deleted user's session token
-				session.Options.MaxAge = -1
-				session.Save(r, w)
-				json.NewEncoder(w).Encode(map[string]string{"message": "User deleted"})
-			}
-			break
 		}
+
+		//Insert any extra data into user_details table
+		err = AddUserDetails(requestedUser, userData, db)
+		if CheckError(err, w) { return }
+
+		json.NewEncoder(w).Encode(map[string]string{"message": "Updated user"})
+		break
+	}
+	case "DELETE": {
+		//Get UUID to delete any additional data in user_details table
+		userUuid, err := GetUUID(requestedUser, db)
+		if CheckError(err, w) { return }
+
+		//Delete user record from DB
+		deleteQuery, err := db.Prepare("DELETE FROM users WHERE username = ?")
+		if CheckError(err, w) { return }
+		defer deleteQuery.Close()
+		deleteQuery.Exec(requestedUser)
+
+		//Delete user details from DB
+		deleteDetailsQuery, err := db.Prepare("DELETE FROM user_details WHERE uuid = ?")
+		if CheckError(err, w) { return }
+		defer deleteDetailsQuery.Close()
+		_, err = deleteDetailsQuery.Exec(userUuid)
+		CheckError(err, w)
+
+		if currentUser == requestedUser {
+			//Expire the deleted user's session token
+			session.Options.MaxAge = -1
+			session.Save(r, w)
 		}
-	} else {
-		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		redisClient.Set(requestedUser, false, -2 * time.Second)
+		json.NewEncoder(w).Encode(map[string]string{"message": "User deleted"})
+		break
+	}
 	}
 }
 
@@ -292,21 +305,26 @@ func AuthHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 		//Create new session token for the user
 		session.Values["username"] = login.Username
-		session.Values["authenticated"] = true
 		session.Save(r, w)
+
+		redisClient.Set(login.Username, true, 86400 * time.Second)
 		json.NewEncoder(w).Encode(map[string]string{"message": "Authenticated"})
 		break
 	}
 	//Clear the current user's session
 	case "DELETE": {
-		authenticated := session.Values["authenticated"]
-		if authenticated == nil {
+		username, err := CheckAuthentication(session.Values["username"])
+		if err != nil {
 			http.Error(w, "No session found", http.StatusUnauthorized)
 			return
 		}
+
 		//Set cookie to expire immediately
 		session.Options.MaxAge = -1
 		session.Save(r, w)
+
+		redisClient.Set(username, false, -2 * time.Second)
+
 		json.NewEncoder(w).Encode(map[string]string{"message": "Session deleted"})
 		break
 	}
@@ -466,4 +484,24 @@ func DecodeJson(body io.ReadCloser) (map[string]string, error) {
 	}
 
 	return userData, nil
+}
+
+func NewRedisClient() *redis.Client {
+	redisClient = redis.NewClient(&redis.Options {
+		Addr: REDIS_CLIENT_ADDR,
+		Password: REDIS_CLIENT_PASSWORD,
+		DB: REDIS_DB,
+	})
+	return redisClient
+}
+
+func CheckAuthentication(username interface{}) (string, error) {
+	if username != nil {
+		user := username.(string)
+		authenticated, _ := strconv.ParseBool(redisClient.Get(user).Val())
+		if authenticated {
+			return user, nil
+		}
+	}
+	return "", errors.New("Not authenticated")
 }
