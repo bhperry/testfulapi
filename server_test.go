@@ -7,14 +7,14 @@ import (
 	"io/ioutil"
 	"strings"
 	"fmt"
+	"errors"
+	"time"
 	"database/sql/driver"
 
 	"github.com/erikstmartin/go-testdb"
 	"github.com/bhperry/testfulapi/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
-	"errors"
-	"time"
 )
 
 const BHPERRY_UUID = "cb713068-8278-457a-a782-69e6e8a4efae"

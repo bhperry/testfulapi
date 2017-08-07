@@ -6,6 +6,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"io/ioutil"
+	"io"
+	"strconv"
+	"time"
+	"errors"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
@@ -14,11 +19,6 @@ import (
 	"github.com/go-redis/redis"
 
 	"golang.org/x/crypto/bcrypt"
-	"io/ioutil"
-	"io"
-	"strconv"
-	"time"
-	"errors"
 )
 
 const (
