@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"strings"
 	"fmt"
-	//"database/sql"
 	"database/sql/driver"
 
 	"github.com/erikstmartin/go-testdb"

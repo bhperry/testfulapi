@@ -533,7 +533,6 @@ func InitDB() {
 		panic(err)
 	}
 
-	println("Create users")
 	//users table
 	_, err = db.Exec("CREATE TABLE IF NOT EXISTS `users` (" +
 		"`uuid` char(36) NOT NULL," +
@@ -550,7 +549,6 @@ func InitDB() {
 		panic(err)
 	}
 
-	println("Create user_details")
 	_, err = db.Exec("CREATE TABLE IF NOT EXISTS `user_details` (" +
 		"`uuid` CHAR(36) NOT NULL," +
 		"`attr` VARCHAR(200) NOT NULL," +
