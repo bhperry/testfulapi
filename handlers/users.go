@@ -21,9 +21,14 @@ import (
 	"errors"
 )
 
-const DUPLICATE_ENTRY_ERROR string = "Error 1062"
-
 const (
+	//Constants for using mysql database
+	DB_USER string = "root"
+	DB_PASSWORD string = "password1234"
+	DB_SCHEMA string = "userdb"
+	DUPLICATE_ENTRY_ERROR string = "Error 1062"
+
+	//Redis constants
 	REDIS_CLIENT_ADDR string = "localhost:6379"
 	REDIS_CLIENT_PASSWORD string = ""
 	REDIS_DB int = 0
@@ -32,8 +37,10 @@ const (
 //Session data store
 var store = sessions.NewCookieStore([]byte("super-duper-ultra-mega-secret-key"))
 
-//Used for determining what data goes in user table and what goes in user_details
+//Used for determining what data goes in 'user' table and what goes in 'user_details'
 var primaryUserData = map[string]bool{"username":true, "password":true, "email":true, "address":true, "phone":true, "admin":true}
+
+var db *sql.DB
 
 var redisClient *redis.Client
 
@@ -43,7 +50,7 @@ var redisClient *redis.Client
 	Return welcome message to unauthenticated users
 	Return user JSON data otherwise
  */
-func IndexHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, err := store.Get(r, "session")
 	if CheckError(err, w) { return }
@@ -52,7 +59,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	//If authenticated output user data, else output a happy message
 	if err == nil {
 		//Get user data
-		details, err := GetUserDetails(currentUser, db)
+		details, err := GetUserDetails(currentUser)
 		if CheckError(err, w) { return }
 
 		//Return user JSON data to the client
@@ -68,14 +75,14 @@ func IndexHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	Create a new user in the database with the data supplied
 	Assigns a UUID, and hashes the password before storing
  */
-func NewUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
 
 	currentUser, err := CheckAuthentication(session.Values["username"])
 	currentUserIsAdmin := false
 	if err == nil {
-		currentUserIsAdmin = IsAdmin(currentUser, db)
+		currentUserIsAdmin = IsAdmin(currentUser)
 	}
 
 	//Get JSON data from POST request
@@ -132,7 +139,7 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	//Insert any additional data into user_details table
-	err = AddUserDetails(username, userData, db)
+	err = AddUserDetails(username, userData)
 	if CheckError(err, w) { return }
 
 	json.NewEncoder(w).Encode(map[string]string{"message": "Successfully created new user"})
@@ -144,7 +151,7 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	Put updates in user DB if authorized
 	Delete user from DB if authorized
  */
-func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func UserHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
 	vars := mux.Vars(r)
@@ -157,7 +164,7 @@ func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	//Check is current user is allowed to access requested data
 	requestedUser := vars["username"]
-	currentUserIsAdmin := IsAdmin(currentUser, db)
+	currentUserIsAdmin := IsAdmin(currentUser)
 
 	//If authenticated user is not admin, don't give access to other users
 	if requestedUser != currentUser && !currentUserIsAdmin {
@@ -168,7 +175,7 @@ func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	switch r.Method {
 	//Return the user's data
 	case "GET": {
-		details, err := GetUserDetails(requestedUser, db)
+		details, err := GetUserDetails(requestedUser)
 		if CheckError(err, w) { return }
 
 		//Return JSON user data to the client
@@ -226,7 +233,7 @@ func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 
 		//Insert any extra data into user_details table
-		err = AddUserDetails(requestedUser, userData, db)
+		err = AddUserDetails(requestedUser, userData)
 		if CheckError(err, w) { return }
 
 		json.NewEncoder(w).Encode(map[string]string{"message": "Updated user"})
@@ -234,7 +241,7 @@ func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	case "DELETE": {
 		//Get UUID to delete any additional data in user_details table
-		userUuid, err := GetUUID(requestedUser, db)
+		userUuid, err := GetUUID(requestedUser)
 		if CheckError(err, w) { return }
 
 		//Delete user record from DB
@@ -267,7 +274,7 @@ func UserHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	Post user's credentials to get session token
 	Delete current user's session token
  */
-func AuthHandler(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+func AuthHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
 
@@ -358,7 +365,7 @@ func CheckError(err error, w http.ResponseWriter) bool {
 /**
 	Collect all data pertaining to the given user in a string map
  */
-func GetUserDetails(username string, db *sql.DB) (map[string]string, error) {
+func GetUserDetails(username string) (map[string]string, error) {
 	details := make(map[string]string)
 	var userUuid, email, address, phone string
 	queryUser := "SELECT uuid, email, address, phone FROM users WHERE username = ?"
@@ -407,14 +414,14 @@ func GetUserDetails(username string, db *sql.DB) (map[string]string, error) {
 		(anything besides the basics given in the Coding Challenge doc)
 	TODO: Delete data at Key if Value = ""?
  */
-func AddUserDetails(username string, details map[string]string, db *sql.DB) error {
+func AddUserDetails(username string, details map[string]string) error {
 	//No need to do anything if no details given
 	if len(details) == 0 {
 		return nil
 	}
 
 	//Get user's UUID to access the user_details table
-	userUuid, err := GetUUID(username, db)
+	userUuid, err := GetUUID(username)
 	if err != nil {
 		return err
 	}
@@ -438,7 +445,7 @@ func AddUserDetails(username string, details map[string]string, db *sql.DB) erro
 /**
 	Gets the UUID for the given username
  */
-func GetUUID(username string, db *sql.DB) (string, error) {
+func GetUUID(username string) (string, error) {
 	var userUuid string
 	queryUser := "SELECT uuid FROM users WHERE username = ?"
 	err := db.QueryRow(queryUser, username).Scan(&userUuid)
@@ -451,7 +458,7 @@ func GetUUID(username string, db *sql.DB) (string, error) {
 /**
 	Determine if the given user is an admin
  */
-func IsAdmin(username string, db *sql.DB) bool {
+func IsAdmin(username string) bool {
 	var isAdmin bool
 	err := db.QueryRow("SELECT admin FROM users WHERE username = ?", username).Scan(&isAdmin)
 	if err != nil {
@@ -484,6 +491,67 @@ func DecodeJson(body io.ReadCloser) (map[string]string, error) {
 	}
 
 	return userData, nil
+}
+
+/**
+	Setup a connection to the MySQL database
+ */
+func OpenDB() *sql.DB {
+	var err error
+	db, err = sql.Open("mysql", DB_USER + ":" + DB_PASSWORD + "@/" + DB_SCHEMA + "?charset=utf8")
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
+/**
+	Setup a Test database
+ */
+func OpenTestDB() *sql.DB {
+	var err error
+	db, err = sql.Open("testdb", "")
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
+/**
+	Check if the schema and tables all exist, and create them if not
+ */
+func InitDB() {
+	//userdb schema
+	_, err := db.Query("CREATE DATABASE IF NOT EXISTS " + DB_SCHEMA)
+	if err != nil {
+		panic(err)
+	}
+
+	//users table
+	_, err = db.Query("CREATE TABLE IF NOT EXISTS `users` (" +
+		"`uuid` char(36) NOT NULL," +
+		"`username` varchar(100) NOT NULL," +
+		"`password` varchar(64) NOT NULL," +
+		"`email` varchar(254) DEFAULT NULL," +
+		"`address` varchar(200) DEFAULT NULL," +
+		"`phone` varchar(30) DEFAULT NULL," +
+		"`admin` tinyint(4) DEFAULT '0'," +
+		"PRIMARY KEY (`uuid`)," +
+		"UNIQUE KEY `username_UNIQUE` (`username`)" +
+		");")
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = db.Query("CREATE TABLE IF NOT EXISTS `user_details` (" +
+		"`uuid` CHAR(36) NOT NULL," +
+		"`attr` VARCHAR(200) NOT NULL," +
+		"`val` VARCHAR(200) NOT NULL," +
+		"PRIMARY KEY (`uuid`, `attr`)" +
+		");")
+	if err != nil {
+		panic(err)
+	}
 }
 
 func NewRedisClient() *redis.Client {

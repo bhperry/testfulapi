@@ -7,7 +7,7 @@ import (
 	"io/ioutil"
 	"strings"
 	"fmt"
-	"database/sql"
+	//"database/sql"
 	"database/sql/driver"
 
 	"github.com/erikstmartin/go-testdb"
@@ -21,7 +21,7 @@ import (
 const BHPERRY_UUID = "cb713068-8278-457a-a782-69e6e8a4efae"
 const BHPERRY_HASEHD_PASSWORD = "$2a$10$tc7FyzbvIOEk00Yr9jcdiO4b6qmaqFiiQ1Va.3uE0BsFZGgJc/tau"
 
-var db, _ = sql.Open("testdb", "")
+var _ = handlers.OpenTestDB()
 
 var redisClient = handlers.NewRedisClient()
 
@@ -46,7 +46,7 @@ func TestGetIndexUnauthenticated(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 
-	handlers.IndexHandler(response, request, db)
+	handlers.IndexHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -78,7 +78,7 @@ func TestGetIndexAuthenticated(t *testing.T) {
 	response := httptest.NewRecorder()
 
 	AuthenticateRequest(response, request, "bhperry")
-	handlers.IndexHandler(response, request, db)
+	handlers.IndexHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -110,7 +110,7 @@ func TestPostNewUser(t *testing.T) {
 
 	response := httptest.NewRecorder()
 
-	handlers.NewUserHandler(response, request, db)
+	handlers.NewUserHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -133,7 +133,7 @@ func TestPostNewUserMissingUsername(t *testing.T) {
 
 	response := httptest.NewRecorder()
 
-	handlers.NewUserHandler(response, request, db)
+	handlers.NewUserHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -161,7 +161,7 @@ func TestPostNewUserDuplicateUsername(t *testing.T) {
 
 	response := httptest.NewRecorder()
 
-	handlers.NewUserHandler(response, request, db)
+	handlers.NewUserHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -184,7 +184,7 @@ func TestGetUserUnauthenticated(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 
-	handlers.UserHandler(response, request, db)
+	handlers.UserHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -213,7 +213,7 @@ func TestGetUserAuthenticated(t *testing.T) {
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		//Add authentication to the request and pass on to handler
 		AuthenticateRequest(w, r, "bhperry")
-		handlers.UserHandler(w, r, db)
+		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
 	testServer := httptest.NewServer(router)
@@ -242,7 +242,7 @@ func TestGetOtherUserUnauthorized(t *testing.T) {
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		//Add authentication for a different user to the request and pass on to handler
 		AuthenticateRequest(w, r, "someotherperson")
-		handlers.UserHandler(w, r, db)
+		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
 	testServer := httptest.NewServer(router)
@@ -285,7 +285,7 @@ func TestGetOtherUserAuthorized(t *testing.T) {
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		//Add authentication for a different user to the request and pass on to handler
 		AuthenticateRequest(w, r, "someotherperson")
-		handlers.UserHandler(w, r, db)
+		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
 	testServer := httptest.NewServer(router)
@@ -336,7 +336,7 @@ func TestPutUserAuthenticated(t *testing.T) {
 		r.Method = "PUT"
 		//Add authentication to the request and pass on to handler
 		AuthenticateRequest(w, r, "bhperry")
-		handlers.UserHandler(w, r, db)
+		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
 	testServer := httptest.NewServer(router)
@@ -387,7 +387,7 @@ func TestPutOtherUserAuthorized(t *testing.T) {
 		r.Method = "PUT"
 		//Add authentication to the request and pass on to handler
 		AuthenticateRequest(w, r, "bhperry")
-		handlers.UserHandler(w, r, db)
+		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
 	testServer := httptest.NewServer(router)
@@ -439,7 +439,7 @@ func TestDeleteUserAuthenticated(t *testing.T) {
 		r.Method = "DELETE"
 		//Add authentication to the request and pass on to handler
 		AuthenticateRequest(w, r, "bhperry")
-		handlers.UserHandler(w, r, db)
+		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
 	testServer := httptest.NewServer(router)
@@ -493,7 +493,7 @@ func TestDeleteOtherUserAuthorized(t *testing.T) {
 		r.Method = "DELETE"
 		//Add authentication to the request and pass on to handler
 		AuthenticateRequest(w, r, "testAdmin")
-		handlers.UserHandler(w, r, db)
+		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
 	testServer := httptest.NewServer(router)
@@ -538,7 +538,7 @@ func TestPostAuth(t *testing.T) {
 
 	response := httptest.NewRecorder()
 
-	handlers.AuthHandler(response, request, db)
+	handlers.AuthHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -571,7 +571,7 @@ func TestPostAuthBadPassword(t *testing.T) {
 
 	response := httptest.NewRecorder()
 
-	handlers.AuthHandler(response, request, db)
+	handlers.AuthHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -604,7 +604,7 @@ func TestPostAuthBadUsername(t *testing.T) {
 
 	response := httptest.NewRecorder()
 
-	handlers.AuthHandler(response, request, db)
+	handlers.AuthHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -626,7 +626,7 @@ func TestDeleteAuth(t *testing.T) {
 
 	AuthenticateRequest(response, request, "bhperry")
 
-	handlers.AuthHandler(response, request, db)
+	handlers.AuthHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)
@@ -646,7 +646,7 @@ func TestDeleteAuthNoSession(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 
-	handlers.AuthHandler(response, request, db)
+	handlers.AuthHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
 	t.Log(responseText)

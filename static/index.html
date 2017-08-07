@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>TESTful API</title>
-
 </head>
 <body>
     <label for="selectMethod">Method</label>
@@ -58,7 +57,9 @@
         args.forEach(function(arg) {
             var keyVal = arg.split(":");
             if (keyVal.length == 2) {
-                params[keyVal[0].trim()] = keyVal[1].trim();
+                keyVal[0] = keyVal[0].trim().replace(/"/g, "");
+                keyVal[1] = keyVal[1].trim().replace(/"/g, "");
+                params[keyVal[0]] = keyVal[1];
             }
         });
 
@@ -90,7 +91,7 @@
             }
             else {
                 console.log(request.responseText);
-                responseText.innerText = request.responseText;
+                responseText.innerText = "Error " + request.status + ": " + request.responseText;
             }
         };
 
