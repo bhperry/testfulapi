@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 	"errors"
+	"log"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
@@ -19,7 +20,6 @@ import (
 	"github.com/go-redis/redis"
 
 	"golang.org/x/crypto/bcrypt"
-	"log"
 )
 
 const (
@@ -57,7 +57,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	session, err := store.Get(r, "session")
 	if CheckError(err, w) { return }
 
-	currentUser, err := CheckAuthentication(session.Values["username"])
+	currentUser, err := CheckAuthentication(session.Values["uuid"])
 	//If authenticated output user data, else output a happy message
 	if err == nil {
 		//Get user data
@@ -81,7 +81,7 @@ func NewUserHandler(w http.ResponseWriter, r *http.Request) {
 	//Get user's session data
 	session, _ := store.Get(r, "session")
 
-	currentUser, err := CheckAuthentication(session.Values["username"])
+	currentUser, err := CheckAuthentication(session.Values["uuid"])
 	currentUserIsAdmin := false
 	if err == nil {
 		currentUserIsAdmin = IsAdmin(currentUser)
@@ -158,7 +158,7 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session")
 	vars := mux.Vars(r)
 
-	currentUser, err := CheckAuthentication(session.Values["username"])
+	currentUser, err := CheckAuthentication(session.Values["uuid"])
 	if err != nil {
 		http.Error(w, "Not authenticated", http.StatusUnauthorized)
 		return
@@ -198,32 +198,49 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 		//Pull out the primary user data from the map and add to user update query
 		for k, v := range userData {
 			if _, ok := primaryUserData[k]; ok {
-				if k == "username" || k == "password" {
-					//Not handling updating username or password, as per Challenge DOC
-					delete(userData, k)
-				} else {
-					//Only allow admins to set the admin property
-					if k == "admin" && currentUserIsAdmin {
-						//Only set the property if a real boolean value was given
-						setAdmin, err := strconv.ParseBool(v)
-						if err == nil {
-							updateString += fmt.Sprintf(" %s = ?", k)
-							updateValues = append(updateValues, setAdmin)
-						}
-					} else {
+				//if k == "username" || k == "password" {
+				//	//Not handling updating username or password, as per Challenge DOC
+				//	delete(userData, k)
+				//} else {
+
+				//Only allow admins to set the admin property
+				if k == "admin" && currentUserIsAdmin {
+					//Only set the property if a real boolean value was given
+					setAdmin, err := strconv.ParseBool(v)
+					if err == nil {
 						updateString += fmt.Sprintf(" %s = ?", k)
-						updateValues = append(updateValues, v)
+						updateValues = append(updateValues, setAdmin)
 					}
-					//Remove data that has been used
-					delete(userData, k)
+				} else {
+					var value interface{} = v
+					//Send error on blank username, cancel entire update request
+					if k == "username" && v == "" {
+						http.Error(w, "Cannot set blank username", http.StatusBadRequest)
+						return
+					} else if k == "password" {
+						if v == "" {
+							//Send error on blank password, cancel entire update request
+							http.Error(w, "Cannot set blank password", http.StatusBadRequest)
+							return
+						}
+						//Get salted and hashed password
+						value, err = bcrypt.GenerateFromPassword([]byte(v), bcrypt.DefaultCost)
+						if CheckError(err, w) { return }
+					}
+					updateString += fmt.Sprintf(", %s = ?", k)
+					updateValues = append(updateValues, value)
 				}
+				//Remove data that has been used
+				delete(userData, k)
+
+				//}
 			}
 		}
 
 		//Run update on users table if any primary data was changed
 		if updateString != "" {
 			//Prepare statement
-			update, err := db.Prepare("UPDATE users SET" + updateString + " WHERE username = ?")
+			update, err := db.Prepare("UPDATE users SET" + strings.TrimLeft(updateString, ",") + " WHERE username = ?")
 			if CheckError(err, w) { return }
 			defer update.Close()
 
@@ -254,6 +271,8 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 			session.Save(r, w)
 		}
 		redisClient.Set(requestedUser, false, -2 * time.Second)
+		redisClient.BgSave()
+
 		json.NewEncoder(w).Encode(map[string]string{"message": "User deleted"})
 		break
 	}
@@ -287,8 +306,8 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		//Check if the username exists and correct password was entered
-		var hashedPassword string
-		err := db.QueryRow("SELECT password FROM users WHERE username = ?", login.Username).Scan(&hashedPassword)
+		var userUuid, hashedPassword string
+		err := db.QueryRow("SELECT uuid, password FROM users WHERE username = ?", login.Username).Scan(&userUuid, &hashedPassword)
 		if err == sql.ErrNoRows || err != nil {
 			http.Error(w, "Invalid username", http.StatusUnauthorized)
 			return
@@ -296,32 +315,45 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 
 		//Compare hashed password and user provided password
 		err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(login.Password))
-		if err == bcrypt.ErrMismatchedHashAndPassword {
-			http.Error(w, "Invalid password", http.StatusUnauthorized)
+		if err != nil {
+			if err == bcrypt.ErrMismatchedHashAndPassword {
+				http.Error(w, "Invalid password", http.StatusUnauthorized)
+			} else {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+			}
 			return
 		}
 
 		//Create new session token for the user
-		session.Values["username"] = login.Username
+		//SetAuthentication(w, r, userUuid)
+		//session.Values["username"] = login.Username
+		session.Values["uuid"] = userUuid
 		session.Save(r, w)
 
-		redisClient.Set(login.Username, true, 86400 * time.Second)
+		//Set redis session variable, then save in background
+		redisClient.Set(userUuid, true, 86400 * time.Second)
+		redisClient.BgSave()
+
 		json.NewEncoder(w).Encode(map[string]string{"message": "Authenticated"})
 		break
 	}
 	//Clear the current user's session
 	case "DELETE": {
-		username, err := CheckAuthentication(session.Values["username"])
+		_, err := CheckAuthentication(session.Values["uuid"])
 		if err != nil {
 			http.Error(w, "No session found", http.StatusUnauthorized)
 			return
 		}
 
+		userUuid := session.Values["uuid"].(string)
+
 		//Set cookie to expire immediately
 		session.Options.MaxAge = -1
 		session.Save(r, w)
 
-		redisClient.Set(username, false, -2 * time.Second)
+		//Delete redis session variable, then save in background
+		redisClient.Set(userUuid, false, -2 * time.Second)
+		redisClient.BgSave()
 
 		json.NewEncoder(w).Encode(map[string]string{"message": "Session deleted"})
 		break
@@ -332,6 +364,7 @@ func AuthHandler(w http.ResponseWriter, r *http.Request) {
 /**
 	Handles GET /utility
 	Serves the request utility for easy access to API
+	TODO: Better utility page
  */
 func RequestUtilityHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w,r, "static/index.html")
@@ -344,6 +377,7 @@ func RequestUtilityHandler(w http.ResponseWriter, r *http.Request) {
 /**
 	Check if an internal server error has occurred,
 	and send error message to client if needed
+	TODO: Stop sending internal server errors back to the client
  */
 func CheckError(err error, w http.ResponseWriter) bool {
 	if err != nil {
@@ -403,7 +437,7 @@ func GetUserDetails(username string) (map[string]string, error) {
 /**
 	Insert or update any extra data for a user
 		(anything besides the basics given in the Coding Challenge doc)
-	TODO: Delete data at Key if Value = ""?
+	TODO: Move details to Redis
  */
 func AddUserDetails(username string, details map[string]string) error {
 	//No need to do anything if no details given
@@ -422,17 +456,30 @@ func AddUserDetails(username string, details map[string]string) error {
 	if err != nil {
 		return err
 	}
+	deleteEmpty, err := db.Prepare("DELETE FROM user_details WHERE uuid = ? AND attr = ?")
+	if err != nil {
+		return err
+	}
+
 	defer insertOrUpdate.Close()
 
 	//For each detail, insert/update the key,value pair in user_details
 	for k, v := range details {
-		_, err = insertOrUpdate.Exec(userUuid, k, v, v)
-		if err != nil {
-			return err
+		if v == "" {
+			_, err = deleteEmpty.Exec(userUuid, k)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err = insertOrUpdate.Exec(userUuid, k, v, v)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
+
 /**
 	Gets the UUID for the given username
  */
@@ -444,6 +491,16 @@ func GetUUID(username string) (string, error) {
 		return "", err
 	}
 	return userUuid, nil
+}
+
+func GetUsername(userUuid string) (string, error) {
+	var username string
+	queryUser := "SELECT username FROM users WHERE uuid = ?"
+	err := db.QueryRow(queryUser, userUuid).Scan(&username)
+	if err == sql.ErrNoRows || err != nil {
+		return "", err
+	}
+	return username, nil
 }
 
 /**
@@ -553,6 +610,9 @@ func InitDB() {
 	}
 }
 
+/**
+	Initialize the Redis client and check if redis-server running
+ */
 func NewRedisClient() *redis.Client {
 	redisClient = redis.NewClient(&redis.Options {
 		Addr: REDIS_CLIENT_ADDR,
@@ -568,12 +628,19 @@ func NewRedisClient() *redis.Client {
 	return redisClient
 }
 
-func CheckAuthentication(username interface{}) (string, error) {
-	if username != nil {
-		user := username.(string)
-		authenticated, _ := strconv.ParseBool(redisClient.Get(user).Val())
+/**
+	Check the credentials of the user
+ */
+func CheckAuthentication(userUuid interface{}) (string, error) {
+	if userUuid != nil {
+		uuidString := userUuid.(string)
+		authenticated, _ := strconv.ParseBool(redisClient.Get(uuidString).Val())
 		if authenticated {
-			return user, nil
+			username, err := GetUsername(uuidString)
+			if err != nil {
+				return "", err
+			}
+			return username, nil
 		}
 	}
 	return "", errors.New("Not authenticated")

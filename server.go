@@ -29,7 +29,7 @@ func main() {
 
 	//Open Redis
 	redisClient := handlers.NewRedisClient()
-	defer redisClient.Close()
+	defer redisClient.ShutdownSave()
 
 	//Connect endpoints with their handlers
 	router := mux.NewRouter()

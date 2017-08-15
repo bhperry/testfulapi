@@ -16,9 +16,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 )
-
+const TEST_UUID = "d966b3da-1fae-404a-aab4-78890a081ca0"
 const BHPERRY_UUID = "cb713068-8278-457a-a782-69e6e8a4efae"
-const BHPERRY_HASEHD_PASSWORD = "$2a$10$tc7FyzbvIOEk00Yr9jcdiO4b6qmaqFiiQ1Va.3uE0BsFZGgJc/tau"
+const BHPERRY_HASHED_PASSWORD = "$2a$10$tc7FyzbvIOEk00Yr9jcdiO4b6qmaqFiiQ1Va.3uE0BsFZGgJc/tau"
 
 var _ = handlers.OpenTestDB()
 
@@ -63,7 +63,10 @@ func TestGetIndexAuthenticated(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"uuid", "email", "address", "phone"}
 		rows := ""
-		if args[0] == "bhperry" {
+		if query == "SELECT username FROM users WHERE uuid = ?" {
+			columns = []string{"username"}
+			rows = "bhperry"
+		} else if args[0] == "bhperry" {
 			rows = BHPERRY_UUID + `,bhperry94@gmail.com,507 W Wilson St. Apt 602,(314) 406-1345`
 		}
 
@@ -76,7 +79,7 @@ func TestGetIndexAuthenticated(t *testing.T) {
 	}
 	response := httptest.NewRecorder()
 
-	AuthenticateRequest(response, request, "bhperry")
+	AuthenticateRequest(response, request, BHPERRY_UUID)
 	handlers.IndexHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
 	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
@@ -201,7 +204,10 @@ func TestGetUserAuthenticated(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"uuid", "email", "address", "phone"}
 		rows := ""
-		if args[0] == "bhperry" {
+		if query == "SELECT username FROM users WHERE uuid = ?" {
+			columns = []string{"username"}
+			rows = "bhperry"
+		} else if args[0] == "bhperry" {
 			rows = BHPERRY_UUID + `,bhperry94@gmail.com,507 W Wilson St. Apt 602,(314) 406-1345`
 		}
 
@@ -211,7 +217,7 @@ func TestGetUserAuthenticated(t *testing.T) {
 	router := mux.NewRouter()
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		//Add authentication to the request and pass on to handler
-		AuthenticateRequest(w, r, "bhperry")
+		AuthenticateRequest(w, r, BHPERRY_UUID)
 		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
@@ -237,10 +243,20 @@ func TestGetUserAuthenticated(t *testing.T) {
 
 //Tests the same code as for PUT and DELETE unauthorized
 func TestGetOtherUserUnauthorized(t *testing.T) {
+	//Stubbed query to get username from UUID
+	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
+		columns := []string{"username"}
+		rows := ""
+		if query == "SELECT username FROM users WHERE uuid = ?" {
+			rows = "TestUser"
+		}
+		return testdb.RowsFromCSVString(columns, rows), nil
+	})
+
 	router := mux.NewRouter()
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		//Add authentication for a different user to the request and pass on to handler
-		AuthenticateRequest(w, r, "someotherperson")
+		AuthenticateRequest(w, r, TEST_UUID)
 		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
@@ -269,7 +285,10 @@ func TestGetOtherUserAuthorized(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"admin"}
 		rows := ""
-		if args[0] == "someotherperson" {
+		if query == "SELECT username FROM users WHERE uuid = ?" {
+			columns = []string{"username"}
+			rows = "TestUser"
+		} else if args[0] == "TestUser" {
 			//IsAdmin query
 			rows = `true`
 		} else if args[0] == "bhperry" {
@@ -283,7 +302,7 @@ func TestGetOtherUserAuthorized(t *testing.T) {
 	router := mux.NewRouter()
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		//Add authentication for a different user to the request and pass on to handler
-		AuthenticateRequest(w, r, "someotherperson")
+		AuthenticateRequest(w, r, TEST_UUID)
 		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
@@ -310,11 +329,15 @@ func TestGetOtherUserAuthorized(t *testing.T) {
 /*-----------    PUT /user/{username}    -----------*/
 
 func TestPutUserAuthenticated(t *testing.T) {
-	//Stubbed query for checking if user is admin
+	//Stubbed query for checking if user is admin and getting username from UUID
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"admin"}
 		rows := ""
-		if args[0] == "bhperry" {
+
+		if query == "SELECT username FROM users WHERE uuid = ?" {
+			columns = []string{"username"}
+			rows = "bhperry"
+		} else if args[0] == "bhperry" {
 			rows = `true`
 		}
 		return testdb.RowsFromCSVString(columns, rows), nil
@@ -334,7 +357,7 @@ func TestPutUserAuthenticated(t *testing.T) {
 		r.Body = ioutil.NopCloser(strings.NewReader(request_data))
 		r.Method = "PUT"
 		//Add authentication to the request and pass on to handler
-		AuthenticateRequest(w, r, "bhperry")
+		AuthenticateRequest(w, r, BHPERRY_UUID)
 		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
@@ -363,7 +386,10 @@ func TestPutOtherUserAuthorized(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"admin"}
 		rows := ""
-		if args[0] == "bhperry" {
+		if query == "SELECT username FROM users WHERE uuid = ?" {
+			columns = []string{"username"}
+			rows = "bhperry"
+		} else if args[0] == "bhperry" {
 			rows = `true`
 		} else {
 			rows = `false`
@@ -385,7 +411,7 @@ func TestPutOtherUserAuthorized(t *testing.T) {
 		r.Body = ioutil.NopCloser(strings.NewReader(request_data))
 		r.Method = "PUT"
 		//Add authentication to the request and pass on to handler
-		AuthenticateRequest(w, r, "bhperry")
+		AuthenticateRequest(w, r, BHPERRY_UUID)
 		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
@@ -422,6 +448,9 @@ func TestDeleteUserAuthenticated(t *testing.T) {
 		} else if query == "SELECT admin FROM users WHERE username = ?" {
 			columns = []string{"admin"}
 			rows = "false"
+		} else if query == "SELECT username FROM users WHERE uuid = ?" {
+			columns = []string{"username"}
+			rows = "bhperry"
 		}
 		return testdb.RowsFromCSVString(columns, rows), nil
 	})
@@ -437,7 +466,7 @@ func TestDeleteUserAuthenticated(t *testing.T) {
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		r.Method = "DELETE"
 		//Add authentication to the request and pass on to handler
-		AuthenticateRequest(w, r, "bhperry")
+		AuthenticateRequest(w, r, BHPERRY_UUID)
 		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
@@ -471,14 +500,18 @@ func TestDeleteOtherUserAuthorized(t *testing.T) {
 			rows = BHPERRY_UUID
 		} else if query == "SELECT admin FROM users WHERE username = ?" {
 			columns = []string{"admin"}
-			if args[0] == "testAdmin" {
+			if args[0] == "TestUser" {
 				rows = "true"
 			} else {
 				rows = "false"
 			}
+		} else if query == "SELECT username FROM users WHERE uuid = ?" {
+			columns = []string{"username"}
+			rows = "TestUser"
 		}
 		return testdb.RowsFromCSVString(columns, rows), nil
 	})
+
 	//Stubbed query for deleting user
 	testdb.SetExecWithArgsFunc(func(query string, args []driver.Value) (result driver.Result, err error) {
 		if args[0] == "bhperry" || args[0] == BHPERRY_UUID {
@@ -491,7 +524,7 @@ func TestDeleteOtherUserAuthorized(t *testing.T) {
 	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
 		r.Method = "DELETE"
 		//Add authentication to the request and pass on to handler
-		AuthenticateRequest(w, r, "testAdmin")
+		AuthenticateRequest(w, r, TEST_UUID)
 		handlers.UserHandler(w, r)
 	}).Methods("GET", "PUT", "DELETE")
 
@@ -519,10 +552,10 @@ func TestDeleteOtherUserAuthorized(t *testing.T) {
 
 func TestPostAuth(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
-		columns := []string{"password"}
+		columns := []string{"uuid", "password"}
 		rows := ""
 		if args[0] == "bhperry" {
-			rows = BHPERRY_HASEHD_PASSWORD
+			rows = BHPERRY_UUID + ", " + BHPERRY_HASHED_PASSWORD
 		}
 
 		return testdb.RowsFromCSVString(columns, rows), nil
@@ -552,10 +585,10 @@ func TestPostAuth(t *testing.T) {
 
 func TestPostAuthBadPassword(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
-		columns := []string{"password"}
+		columns := []string{"uuid", "password"}
 		rows := ""
 		if args[0] == "bhperry" {
-			rows = BHPERRY_HASEHD_PASSWORD
+			rows = BHPERRY_UUID + ", " + BHPERRY_HASHED_PASSWORD
 		}
 
 		return testdb.RowsFromCSVString(columns, rows), nil
@@ -585,10 +618,10 @@ func TestPostAuthBadPassword(t *testing.T) {
 
 func TestPostAuthBadUsername(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
-		columns := []string{"password"}
+		columns := []string{"uuid", "password"}
 		rows := ""
 		if args[0] == "bhperry" {
-			rows = BHPERRY_HASEHD_PASSWORD
+			rows = BHPERRY_UUID + ", " + BHPERRY_HASHED_PASSWORD
 		}
 
 		return testdb.RowsFromCSVString(columns, rows), nil
@@ -616,14 +649,25 @@ func TestPostAuthBadUsername(t *testing.T) {
 	}
 }
 
+/*-----------    DELETE /auth    -----------*/
+
 func TestDeleteAuth(t *testing.T) {
+	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
+		columns := []string{"username"}
+		rows := ""
+		if query == "SELECT username FROM users WHERE uuid = ?" {
+			rows = "bhperry"
+		}
+		return testdb.RowsFromCSVString(columns, rows), nil
+	})
+
 	request, err := http.NewRequest("DELETE", "/auth", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
 
-	AuthenticateRequest(response, request, "bhperry")
+	AuthenticateRequest(response, request, BHPERRY_UUID)
 
 	handlers.AuthHandler(response, request)
 	body, _ := ioutil.ReadAll(response.Body)
@@ -658,15 +702,16 @@ func TestDeleteAuthNoSession(t *testing.T) {
 	}
 }
 
+
 /*====================================== HELPER METHODS  ======================================*/
 
 
 
-func AuthenticateRequest(w http.ResponseWriter, r *http.Request, username string) {
+func AuthenticateRequest(w http.ResponseWriter, r *http.Request, userUuid string) {
 	store := sessions.NewCookieStore([]byte("super-duper-ultra-mega-secret-key"))
 	session,_ := store.Get(r, "session")
-	session.Values["username"] = username
+	session.Values["uuid"] = userUuid
 	session.Save(r, w)
 
-	redisClient.Set(username, true, 86400 * time.Second)
+	redisClient.Set(userUuid, true, 86400 * time.Second)
 }
