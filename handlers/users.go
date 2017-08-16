@@ -178,7 +178,14 @@ func UserHandler(w http.ResponseWriter, r *http.Request) {
 	//Return the user's data
 	case "GET": {
 		details, err := GetUserDetails(requestedUser)
-		if CheckError(err, w) { return }
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.Error(w, "User not found", http.StatusBadRequest)
+				return
+			} else {
+				http.Error(w, "Error loading user data", http.StatusInternalServerError)
+			}
+		}
 
 		//Return JSON user data to the client
 		json.NewEncoder(w).Encode(map[string]interface{}{"user":details})
@@ -493,6 +500,9 @@ func GetUUID(username string) (string, error) {
 	return userUuid, nil
 }
 
+/**
+	Gets the username for the given UUID
+ */
 func GetUsername(userUuid string) (string, error) {
 	var username string
 	queryUser := "SELECT username FROM users WHERE uuid = ?"

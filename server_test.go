@@ -15,10 +15,26 @@ import (
 	"github.com/bhperry/testfulapi/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
+	"database/sql"
 )
-const TEST_UUID = "d966b3da-1fae-404a-aab4-78890a081ca0"
-const BHPERRY_UUID = "cb713068-8278-457a-a782-69e6e8a4efae"
-const BHPERRY_HASHED_PASSWORD = "$2a$10$tc7FyzbvIOEk00Yr9jcdiO4b6qmaqFiiQ1Va.3uE0BsFZGgJc/tau"
+//DB values
+const (
+	TEST_UUID = "d966b3da-1fae-404a-aab4-78890a081ca0"
+	BHPERRY_UUID = "cb713068-8278-457a-a782-69e6e8a4efae"
+	BHPERRY_HASHED_PASSWORD = "$2a$10$tc7FyzbvIOEk00Yr9jcdiO4b6qmaqFiiQ1Va.3uE0BsFZGgJc/tau"
+)
+
+//Query strings
+const (
+	IS_ADMIN_QUERY = "SELECT admin FROM users WHERE username = ?"
+	GET_USERNAME_QUERY = "SELECT username FROM users WHERE uuid = ?"
+	GET_UUID_QUERY = "SELECT uuid FROM users WHERE username = ?"
+	GET_USER_DETAILS_QUERY = "SELECT uuid, email, address, phone FROM users WHERE username = ?"
+	NEW_USER_NOT_ADMIN_QUERY = "INSERT INTO users(uuid, username, password, email, address, phone) VALUES(?, ?, ?, ?, ?, ?)"
+	NEW_USER_ADMIN_QUERY = "INSERT INTO users(uuid, username, password, email, address, phone, admin) VALUES(?, ?, ?, ?, ?, ?, ?)"
+	DELETE_USER_QUERY = "DELETE FROM users WHERE username = ?"
+	USER_AUTH_QUERY = "SELECT uuid, password FROM users WHERE username = ?"
+)
 
 var _ = handlers.OpenTestDB()
 
@@ -63,10 +79,10 @@ func TestGetIndexAuthenticated(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"uuid", "email", "address", "phone"}
 		rows := ""
-		if query == "SELECT username FROM users WHERE uuid = ?" {
+		if query == GET_USERNAME_QUERY {
 			columns = []string{"username"}
 			rows = "bhperry"
-		} else if args[0] == "bhperry" {
+		} else if query == GET_USER_DETAILS_QUERY {
 			rows = BHPERRY_UUID + `,bhperry94@gmail.com,507 W Wilson St. Apt 602,(314) 406-1345`
 		}
 
@@ -97,7 +113,7 @@ func TestGetIndexAuthenticated(t *testing.T) {
 
 func TestPostNewUser(t *testing.T) {
 	testdb.SetExecWithArgsFunc(func(query string, args []driver.Value) (result driver.Result, err error) {
-		if args[0] == "test" {
+		if query == NEW_USER_NOT_ADMIN_QUERY {
 			return testResult{1, 1}, nil
 		}
 		return testResult{1, 0}, nil
@@ -178,7 +194,7 @@ func TestPostNewUserDuplicateUsername(t *testing.T) {
 
 /*-----------    GET /user/{username}    -----------*/
 
-//Tests the same code as for PUT and DELETE unauthenticated
+	//Tests the same code as for PUT and DELETE unauthenticated
 func TestGetUserUnauthenticated(t *testing.T) {
 	request, err := http.NewRequest("GET", "/user/bhperry", nil)
 	if err != nil {
@@ -204,10 +220,10 @@ func TestGetUserAuthenticated(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"uuid", "email", "address", "phone"}
 		rows := ""
-		if query == "SELECT username FROM users WHERE uuid = ?" {
+		if query == GET_USERNAME_QUERY {
 			columns = []string{"username"}
 			rows = "bhperry"
-		} else if args[0] == "bhperry" {
+		} else if query == GET_USER_DETAILS_QUERY {
 			rows = BHPERRY_UUID + `,bhperry94@gmail.com,507 W Wilson St. Apt 602,(314) 406-1345`
 		}
 
@@ -241,13 +257,13 @@ func TestGetUserAuthenticated(t *testing.T) {
 	}
 }
 
-//Tests the same code as for PUT and DELETE unauthorized
+	//Tests the same code as for PUT and DELETE unauthorized (not admin)
 func TestGetOtherUserUnauthorized(t *testing.T) {
 	//Stubbed query to get username from UUID
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"username"}
 		rows := ""
-		if query == "SELECT username FROM users WHERE uuid = ?" {
+		if query == GET_USERNAME_QUERY {
 			rows = "TestUser"
 		}
 		return testdb.RowsFromCSVString(columns, rows), nil
@@ -285,13 +301,13 @@ func TestGetOtherUserAuthorized(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"admin"}
 		rows := ""
-		if query == "SELECT username FROM users WHERE uuid = ?" {
+		if query == GET_USERNAME_QUERY {
 			columns = []string{"username"}
 			rows = "TestUser"
-		} else if args[0] == "TestUser" {
+		} else if query == IS_ADMIN_QUERY && args[0] == "TestUser" {
 			//IsAdmin query
 			rows = `true`
-		} else if args[0] == "bhperry" {
+		} else if query == GET_USER_DETAILS_QUERY && args[0] == "bhperry" {
 			//GetUserDetails query
 			columns = []string{"uuid", "email", "address", "phone"}
 			rows = BHPERRY_UUID + `,bhperry94@gmail.com,507 W Wilson St. Apt 602,(314) 406-1345`
@@ -326,18 +342,70 @@ func TestGetOtherUserAuthorized(t *testing.T) {
 	}
 }
 
+func TestGetBadUsername(t *testing.T) {
+	//Create stubbed query for test DB
+	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
+		var columns []string
+		rows := ""
+		if query == GET_USERNAME_QUERY {
+			columns = append(columns, "username")
+			rows = "TestUser"
+		} else if query == IS_ADMIN_QUERY {
+			//IsAdmin query
+			columns = append(columns, "admin")
+			rows = `true`
+		} else if query == GET_USER_DETAILS_QUERY {
+			//User not found
+			return nil, sql.ErrNoRows
+		}
+
+		return testdb.RowsFromCSVString(columns, rows), nil
+	})
+
+	router := mux.NewRouter()
+	router.HandleFunc("/user/{username}", func(w http.ResponseWriter, r *http.Request) {
+		//Add authentication to the request and pass on to handler
+		AuthenticateRequest(w, r, BHPERRY_UUID)
+		handlers.UserHandler(w, r)
+	}).Methods("GET", "PUT", "DELETE")
+
+	//Request for a bad username
+	testServer := httptest.NewServer(router)
+	url := testServer.URL + "/user/bimwhatsperry"
+
+	response, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := ioutil.ReadAll(response.Body)
+	responseText := strings.TrimRight(fmt.Sprintf("%s", body), "\n")
+	t.Log(responseText)
+
+	if response.StatusCode != http.StatusBadRequest {
+		t.Error("User doesn not exist, should be bad request\n   code: ", response.StatusCode, "\n   response: ", responseText)
+	}
+	if responseText != "User not found" {
+		t.Error("Incorrect response for bad username from authenticated user:\n     ", responseText)
+	}
+}
+
 /*-----------    PUT /user/{username}    -----------*/
 
 func TestPutUserAuthenticated(t *testing.T) {
 	//Stubbed query for checking if user is admin and getting username from UUID
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
-		columns := []string{"admin"}
+		var columns []string
 		rows := ""
 
-		if query == "SELECT username FROM users WHERE uuid = ?" {
-			columns = []string{"username"}
+		if query == GET_USERNAME_QUERY {
+			columns = append(columns, "username")
 			rows = "bhperry"
-		} else if args[0] == "bhperry" {
+		} else if query == GET_UUID_QUERY {
+			columns = append(columns, "uuid")
+			rows = BHPERRY_UUID
+		} else if query == IS_ADMIN_QUERY && args[0] == "bhperry" {
+			columns = append(columns, "admin")
 			rows = `true`
 		}
 		return testdb.RowsFromCSVString(columns, rows), nil
@@ -386,10 +454,10 @@ func TestPutOtherUserAuthorized(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"admin"}
 		rows := ""
-		if query == "SELECT username FROM users WHERE uuid = ?" {
+		if query == GET_USERNAME_QUERY {
 			columns = []string{"username"}
 			rows = "bhperry"
-		} else if args[0] == "bhperry" {
+		} else if query == IS_ADMIN_QUERY && args[0] == "bhperry" {
 			rows = `true`
 		} else {
 			rows = `false`
@@ -442,13 +510,13 @@ func TestDeleteUserAuthenticated(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{}
 		rows := ""
-		if query == "SELECT uuid FROM users WHERE username = ?" {
+		if query == GET_UUID_QUERY {
 			columns = []string{"uuid"}
 			rows = BHPERRY_UUID
-		} else if query == "SELECT admin FROM users WHERE username = ?" {
+		} else if query == IS_ADMIN_QUERY {
 			columns = []string{"admin"}
 			rows = "false"
-		} else if query == "SELECT username FROM users WHERE uuid = ?" {
+		} else if query == GET_USERNAME_QUERY {
 			columns = []string{"username"}
 			rows = "bhperry"
 		}
@@ -456,7 +524,7 @@ func TestDeleteUserAuthenticated(t *testing.T) {
 	})
 	//Stubbed query for deleting user
 	testdb.SetExecWithArgsFunc(func(query string, args []driver.Value) (result driver.Result, err error) {
-		if args[0] == "bhperry" || args[0] == BHPERRY_UUID {
+		if query == DELETE_USER_QUERY {
 			return testResult{1, 1}, nil
 		}
 		return testResult{1, 0}, nil
@@ -495,17 +563,17 @@ func TestDeleteOtherUserAuthorized(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{}
 		rows := ""
-		if query == "SELECT uuid FROM users WHERE username = ?" {
+		if query == GET_UUID_QUERY {
 			columns = []string{"uuid"}
 			rows = BHPERRY_UUID
-		} else if query == "SELECT admin FROM users WHERE username = ?" {
+		} else if query == IS_ADMIN_QUERY {
 			columns = []string{"admin"}
 			if args[0] == "TestUser" {
 				rows = "true"
 			} else {
 				rows = "false"
 			}
-		} else if query == "SELECT username FROM users WHERE uuid = ?" {
+		} else if query == GET_USERNAME_QUERY {
 			columns = []string{"username"}
 			rows = "TestUser"
 		}
@@ -514,7 +582,7 @@ func TestDeleteOtherUserAuthorized(t *testing.T) {
 
 	//Stubbed query for deleting user
 	testdb.SetExecWithArgsFunc(func(query string, args []driver.Value) (result driver.Result, err error) {
-		if args[0] == "bhperry" || args[0] == BHPERRY_UUID {
+		if query == DELETE_USER_QUERY {
 			return testResult{1, 1}, nil
 		}
 		return testResult{1, 0}, nil
@@ -554,7 +622,7 @@ func TestPostAuth(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"uuid", "password"}
 		rows := ""
-		if args[0] == "bhperry" {
+		if query == USER_AUTH_QUERY {
 			rows = BHPERRY_UUID + ", " + BHPERRY_HASHED_PASSWORD
 		}
 
@@ -587,7 +655,7 @@ func TestPostAuthBadPassword(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"uuid", "password"}
 		rows := ""
-		if args[0] == "bhperry" {
+		if query == USER_AUTH_QUERY {
 			rows = BHPERRY_UUID + ", " + BHPERRY_HASHED_PASSWORD
 		}
 
@@ -618,13 +686,10 @@ func TestPostAuthBadPassword(t *testing.T) {
 
 func TestPostAuthBadUsername(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
-		columns := []string{"uuid", "password"}
-		rows := ""
-		if args[0] == "bhperry" {
-			rows = BHPERRY_UUID + ", " + BHPERRY_HASHED_PASSWORD
+		if query == USER_AUTH_QUERY {
+			return nil, sql.ErrNoRows
 		}
-
-		return testdb.RowsFromCSVString(columns, rows), nil
+		return nil, nil
 	})
 
 	request, err := http.NewRequest("POST", "/auth", nil)
@@ -655,7 +720,7 @@ func TestDeleteAuth(t *testing.T) {
 	testdb.SetQueryWithArgsFunc(func(query string, args []driver.Value) (result driver.Rows, err error) {
 		columns := []string{"username"}
 		rows := ""
-		if query == "SELECT username FROM users WHERE uuid = ?" {
+		if query == GET_USERNAME_QUERY {
 			rows = "bhperry"
 		}
 		return testdb.RowsFromCSVString(columns, rows), nil
